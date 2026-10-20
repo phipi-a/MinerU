@@ -150,7 +150,7 @@ def test_medium_native_table_priority_accepts_html_and_removes_internal_text_and
     assert recover.call_args.args[1] == pytest.approx((10.0, 40.0, 90.0, 160.0))
     assert table_page.page_size == (100.0, 200.0)
     assert recover.call_args.kwargs["angle"] == 0
-    page.get_chars_with_geometry.assert_called_once_with()
+    page.get_chars_with_geometry.assert_called_once_with(visible_only=True)
     page.get_vector_geometry.assert_called_once_with()
     page.get_drawing_lines.assert_not_called()
     page.get_path_infos.assert_not_called()
@@ -344,7 +344,7 @@ def test_hybrid_native_table_priority_keeps_none_and_exception_fallbacks(
     )
     assert recover.call_count == 2
     assert [call.kwargs["angle"] for call in recover.call_args_list] == [270, 90]
-    page.get_chars_with_geometry.assert_called_once_with()
+    page.get_chars_with_geometry.assert_called_once_with(visible_only=True)
 
 
 def test_medium_table_tasks_skip_native_html_and_keep_model_fallback() -> None:

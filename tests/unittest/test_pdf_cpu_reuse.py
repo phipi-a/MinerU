@@ -31,10 +31,11 @@ def test_orientation_and_native_table_share_single_character_extraction(monkeypa
     original = PDFPage.get_chars_with_geometry
     calls = []
 
-    def extract(page: PDFPage) -> PDFPageTextGeometry:
-        """记录真实字符提取次数，不替换其结果。"""
+    def extract(page: PDFPage, *, visible_only: bool = False) -> PDFPageTextGeometry:
+        """Record extraction calls while preserving the requested visibility policy."""
+        assert visible_only is True
         calls.append(page)
-        return original(page)
+        return original(page, visible_only=visible_only)
 
     monkeypatch.setattr(PDFPage, "get_chars_with_geometry", extract)
     monkeypatch.setattr(tables, "recover_table_region", lambda *_args, **_kwargs: None)

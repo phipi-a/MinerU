@@ -191,3 +191,6 @@ line-length = 128
 [tool.ruff.lint]
 select = ["C", "E", "F", "W", "ANN"]
 ignore = ["C901", "ANN204", "ANN401"]
+
+[tool.uv.sources]
+docvortex = { git = "https://github.com/phipi-a/DocVortex.git", rev = "5fa9434f4b92cc9513a49d5c183e25a60d54ebd7" }

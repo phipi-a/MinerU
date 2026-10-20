@@ -68,7 +68,7 @@ def _validate_text_formula_window_inputs(
 def _build_pdf_text_line_spans(pdf_page: PDFPage) -> list[_AnalyzeSpan]:
     """将标准方向的 共享原生文本行 转为私有 span，并复用现有字符清洗规则。"""
     page_spans: list[_AnalyzeSpan] = []
-    for pdf_line in get_lines_from_chars(pdf_page.get_chars()):
+    for pdf_line in get_lines_from_chars(pdf_page.get_chars(visible_only=True)):
         try:
             rotation = float(pdf_line.get("rotation", 0.0) or 0.0)
         except (TypeError, ValueError):
@@ -487,6 +487,8 @@ def _fill_window_block_content_and_lines(
                         table_regions=table_regions,
                     )
                 else:
+                    if page_text_geometry is None:
+                        page_text_geometry = pdf_page.get_chars_with_geometry(visible_only=True)
                     evidence = prepare_text_evidence(
                         pdf_page,
                         geometry=page_text_geometry,

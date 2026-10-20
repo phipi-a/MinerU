@@ -30,7 +30,7 @@ class _PageSnapshotEntry:
         """仅在表格或正文确实需要时补齐矢量和链接，并复用已持有的文字 owner。"""
         self.validate_page(page)
         if self.full_snapshot is None:
-            self.full_snapshot = page.get_snapshot()
+            self.full_snapshot = page.get_snapshot(visible_only=True)
         return self.full_snapshot
 
     def close(self) -> None:
@@ -63,7 +63,7 @@ def get_page_snapshot_entry(
         return None
     entry = cache[index]
     if entry is None:
-        entry = _PageSnapshotEntry(ref(page), page.get_text_snapshot())
+        entry = _PageSnapshotEntry(ref(page), page.get_text_snapshot(visible_only=True))
         cache[index] = entry
     entry.validate_page(page)
     return entry if entry.text_owner is not None else None

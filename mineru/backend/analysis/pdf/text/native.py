@@ -97,7 +97,7 @@ def txt_spans_extract(
         return _prepare_post_ocr_spans(need_ocr_spans, spans, pil_img, scale)
 
     if page_chars is None:
-        page_text_geometry = pdf_page.get_chars_with_geometry()
+        page_text_geometry = pdf_page.get_chars_with_geometry(visible_only=True)
         page_chars = page_text_geometry.chars
         tight_bboxes = page_text_geometry.tight_bboxes
         origins = page_text_geometry.origins

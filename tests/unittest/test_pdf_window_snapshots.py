@@ -32,7 +32,7 @@ def _pdf() -> bytes:
 
 def _require_owned(page: PDFPage) -> Any:
     """参考后端跳过真实扩展断言，Rust 模式必须具备 owned 入口。"""
-    owner = page.get_text_snapshot()
+    owner = page.get_text_snapshot(visible_only=True)
     if owner is None:
         pytest.skip("owned text snapshot unavailable in reference backend")
     return owner
@@ -87,7 +87,7 @@ def test_unsupported_owned_probe_is_cached(monkeypatch: pytest.MonkeyPatch) -> N
         cache = [None]
         assert snapshots.get_page_snapshot_entry(cache, 0, page) is None
         assert snapshots.get_page_snapshot_entry(cache, 0, page) is None
-        getter.assert_called_once_with()
+        getter.assert_called_once_with(visible_only=True)
         snapshots.clear_page_snapshot_cache(cache)
         assert cache == []
 
@@ -205,8 +205,8 @@ def test_direction_table_and_body_share_owner_without_legacy_repacking(monkeypat
         )
         assert geometries[0] is captured[0]
         assert cache == [None]
-        owner_getter.assert_called_once_with()
-        full_getter.assert_called_once_with()
+        owner_getter.assert_called_once_with(visible_only=True)
+        full_getter.assert_called_once_with(visible_only=True)
         legacy_getter.assert_not_called()
 
 

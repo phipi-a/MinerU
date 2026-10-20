@@ -278,6 +278,8 @@ def _apply_native_txt_table_priority(
                 # 表格恢复仍消费其真实可变 geometry，但不提前把该兼容副本放进窗口正文缓存。
                 table_page = prepare_table_page(pdf_page, snapshot=snapshot_entry.get_full_snapshot(pdf_page))
             else:
+                if page_text_geometry is None:
+                    page_text_geometry = pdf_page.get_chars_with_geometry(visible_only=True)
                 if vector_geometry is None:
                     vector_geometry = pdf_page.get_vector_geometry()
                 table_page = prepare_table_page(pdf_page, geometry=page_text_geometry, vector_geometry=vector_geometry)
@@ -529,13 +531,13 @@ def _resolve_txt_table_orientations(
                 else:
                     if geometry is None and page_text_geometries is not None and not geometry_failed:
                         try:
-                            geometry = pdf_page.get_chars_with_geometry()
+                            geometry = pdf_page.get_chars_with_geometry(visible_only=True)
                         except Exception as exc:
                             # 扩展几何失败不应让本来可成功的普通字符投票改走视觉模型。
                             logger.debug(f"Hybrid table orientation uses plain chars after geometry failure: {exc}")
                         else:
                             page_text_geometries[page_idx] = geometry
-                    chars = geometry.chars if geometry is not None else pdf_page.get_chars()
+                    chars = geometry.chars if geometry is not None else pdf_page.get_chars(visible_only=True)
                     page_lines_cache[page_idx] = get_lines_from_chars(chars)
             except Exception as exc:
                 logger.warning(f"Hybrid txt table orientation falls back to visual model: page_idx={page_idx}, error={exc}")
