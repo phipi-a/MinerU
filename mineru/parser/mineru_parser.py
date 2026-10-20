@@ -56,12 +56,14 @@ class MinerUParser(DocumentParser):
         parse_mode: _ParseMode = "auto",
         image_analysis: bool = True,
         vlm_config: VlmConfig | None = None,
+        positions: bool = False,
     ) -> None:
         """保存当前解析器的 VLM 配置副本，避免其他应用或调用修改连接设置。"""
         self.tier: Tier = tier
         self.effort: _Effort = effort_for_tier(tier)  # type: ignore[assignment]
         self.parse_mode: _ParseMode = parse_mode
         self.image_analysis: bool = image_analysis
+        self.positions = positions
         self.vlm_config = (vlm_config if vlm_config is not None else config.model.vlm).model_copy(deep=True)
 
     def parse(
@@ -122,6 +124,7 @@ class MinerUParser(DocumentParser):
             source_context=prepared.source_context,
             vlm_config=self.vlm_config,
             source_properties=prepared.source_properties,
+            **({"positions": True} if self.positions else {}),
         )
 
     async def _arun_analysis(self, prepared: _PreparedInput) -> tuple[MiddleJson, ModelJson]:
@@ -136,6 +139,7 @@ class MinerUParser(DocumentParser):
             source_context=prepared.source_context,
             vlm_config=self.vlm_config,
             source_properties=prepared.source_properties,
+            **({"positions": True} if self.positions else {}),
         )
 
     def _prepare_input(

@@ -187,7 +187,7 @@ def test_direction_table_and_body_share_owner_without_legacy_repacking(monkeypat
         monkeypatch.setattr(content, "_fill_native_pdf_text_spans", fill)
         monkeypatch.setattr(content, "_group_page_spans_by_block", lambda *_: {})
         monkeypatch.setattr(content, "_apply_window_post_ocr", lambda *_: None)
-        monkeypatch.setattr(content, "_apply_block_content_and_line_metadata", lambda *_: None)
+        monkeypatch.setattr(content, "_apply_block_content_and_line_metadata", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(content, "apply_text_evidence", lambda *_: None)
         content._fill_window_block_content_and_lines(
             images,
@@ -380,7 +380,7 @@ def test_raw_character_limit_precedes_owned_snapshot(monkeypatch: pytest.MonkeyP
         monkeypatch.setattr(content, "_fill_native_pdf_text_spans", lambda *_args, **_kwargs: [])
         monkeypatch.setattr(content, "_group_page_spans_by_block", lambda *_: {})
         monkeypatch.setattr(content, "_apply_window_post_ocr", lambda *_: None)
-        monkeypatch.setattr(content, "_apply_block_content_and_line_metadata", lambda *_: None)
+        monkeypatch.setattr(content, "_apply_block_content_and_line_metadata", lambda *_args, **_kwargs: None)
         monkeypatch.setattr(content, "apply_text_evidence", lambda *_: None)
         cache = [None]
         content._fill_window_block_content_and_lines(

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any
 
 from docvortex.content import normalize_pdf_model_text
@@ -113,6 +114,9 @@ def _normalize_pdf_model_list(model_list: list[list[dict[str, Any]]]) -> None:
     """清理 PDF 元数据和公式，修复缺失行框，仅过滤空正文或完全缺少可用几何的文本块。"""
     for page_idx, page_model_list in enumerate(model_list):
         for block_idx, block in enumerate(page_model_list):
+            if "_position_tokens" in block and block.get("content") != block.get("_position_content"):
+                block.pop("_position_tokens", None)
+                block.pop("_position_content", None)
             raw_type = block.get("type")
             if raw_type == RAW_PHONETIC:
                 block["type"] = BlockType.TEXT
@@ -143,6 +147,9 @@ def _normalize_pdf_model_list(model_list: list[list[dict[str, Any]]]) -> None:
                     block["content"] = spans
                 else:
                     block["content"] = content
+        for block in page_model_list:
+            if "_position_tokens" in block:
+                block["_position_content"] = deepcopy(block.get("content"))
         normalized_blocks: list[dict[str, Any]] = []
         bbox_fallback_count = 0
         dropped_count = 0
@@ -166,3 +173,15 @@ def _normalize_pdf_model_list(model_list: list[list[dict[str, Any]]]) -> None:
             )
     # 统一在回填、Span 构造及宿主元数据清理完成后调用共享实现。
     normalize_pdf_model_text(model_list)
+    from .text.positions import content_signature
+
+    for blocks in model_list:
+        for block in blocks:
+            original = block.get("_position_content")
+            current = block.get("content")
+            if (
+                isinstance(original, list)
+                and isinstance(current, list)
+                and content_signature(original) == content_signature(current)
+            ):
+                block["_position_content"] = deepcopy(current)

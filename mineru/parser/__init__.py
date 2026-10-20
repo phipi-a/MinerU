@@ -34,10 +34,14 @@ def parse(
     page_range: str = "",
     source_context: HtmlSourceContext | None = None,
     vlm_config: VlmConfig | None = None,
+    positions: bool = False,
 ) -> ParseResult:
     """同步解析文档；source_context 仅供保留 HTML 原始来源的内部调用方使用。"""
     configure_global_log_level()
-    parser = MinerUParser(tier=tier, parse_mode=ocr_mode, image_analysis=image_analysis, vlm_config=vlm_config)
+    parser = MinerUParser(
+        tier=tier, parse_mode=ocr_mode, image_analysis=image_analysis, vlm_config=vlm_config,
+        **({"positions": True} if positions else {}),
+    )
     return parser.parse(path, page_range=page_range, source_context=source_context)
 
 
@@ -50,8 +54,12 @@ async def parse_async(
     page_range: str = "",
     source_context: HtmlSourceContext | None = None,
     vlm_config: VlmConfig | None = None,
+    positions: bool = False,
 ) -> ParseResult:
     """异步解析文档；source_context 仅供保留 HTML 原始来源的内部调用方使用。"""
     configure_global_log_level()
-    parser = MinerUParser(tier=tier, parse_mode=ocr_mode, image_analysis=image_analysis, vlm_config=vlm_config)
+    parser = MinerUParser(
+        tier=tier, parse_mode=ocr_mode, image_analysis=image_analysis, vlm_config=vlm_config,
+        **({"positions": True} if positions else {}),
+    )
     return await parser.parse_async(path, page_range=page_range, source_context=source_context)

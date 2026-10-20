@@ -88,6 +88,7 @@ def analyze_pdf(
     parse_mode: ParseMode = "auto",
     image_analysis: bool = True,
     vlm_config: VlmConfig | None = None,
+    positions: bool = False,
 ) -> AnalysisResult:
     """使用共享资源生命周期与同步窗口编排生产 PDF 模型结果。"""
     state = _PDFAnalysis()
@@ -104,6 +105,7 @@ def analyze_pdf(
             flash_txt_mode=state.flash_txt_mode,
             hybrid_model=state.hybrid_model,
             vlm_predictor=state.predictor,
+            **({"positions": True} if positions else {}),
         )
         result = _build_pdf_analysis_result(state, model_list, effort, infer_started_at)
     finally:
@@ -118,6 +120,7 @@ async def aio_analyze_pdf(
     parse_mode: ParseMode = "auto",
     image_analysis: bool = True,
     vlm_config: VlmConfig | None = None,
+    positions: bool = False,
 ) -> AnalysisResult:
     """原生异步调度 VLM；同步准备、回填与清理使用取消安全的线程边界。"""
     state = _PDFAnalysis()
@@ -134,6 +137,7 @@ async def aio_analyze_pdf(
             image_analysis=image_analysis,
             hybrid_model=state.hybrid_model,
             vlm_predictor=state.predictor,
+            **({"positions": True} if positions else {}),
         )
         result = await run_sync(_build_pdf_analysis_result, state, model_list, effort, infer_started_at)
     finally:

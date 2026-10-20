@@ -626,11 +626,19 @@ def fill_char_in_spans(
     tight_bboxes = tight_bboxes or {}
     origins = origins or {}
 
+    collect_positions = any(span.metadata.get("_collect_positions") for span in spans)
     native_contents = _owned_span_texts(_native_text, spans, median_span_height, detect_scripts)
     if native_contents is not None and len(native_contents) != len(spans):
         raise RuntimeError("Native content count differs from span count")
-    assigned_span_indices = _owned_span_assignments(_native_text, spans, median_span_height) if native_contents is None else []
-    if native_contents is None and assigned_span_indices is not None and len(assigned_span_indices) != len(all_chars):
+    assigned_span_indices = (
+        _owned_span_assignments(_native_text, spans, median_span_height)
+        if native_contents is None or collect_positions else []
+    )
+    if (
+        (native_contents is None or collect_positions)
+        and assigned_span_indices is not None
+        and len(assigned_span_indices) != len(all_chars)
+    ):
         raise RuntimeError("Native span assignments do not match the owned character sequence")
     if assigned_span_indices is None:
         grid_size = max(1, median_span_height)
@@ -746,6 +754,13 @@ def fill_char_in_spans(
             span.metadata.pop(PDF_NATIVE_SCRIPT_MARKUP_KEY, None)
             if text is not None:
                 span.content = text
+            if collect_positions:
+                # Record provenance in parallel; do not replace the native owner's text.
+                shadow = _AnalyzeSpan(span.type, span.bbox, metadata=dict(span.metadata))
+                chars_to_content(shadow, tight_bboxes=tight_bboxes, origins=origins, detect_scripts=detect_scripts)
+                if shadow.content == span.content and "_position_words" in shadow.metadata:
+                    span.metadata["_position_words"] = shadow.metadata["_position_words"]
+                    span.metadata["_position_char_boxes"] = shadow.metadata["_position_char_boxes"]
             del span.metadata["chars"]
         # 有的span中虽然没有字但有一两个空的占位符，用宽高和content长度过滤
         if should_post_ocr_private_use and span.content:
@@ -1093,6 +1108,7 @@ def chars_to_content(
                 protected_body_indices=protected_body_indices,
             )
 
+        position_records = []
         role_text_parts = []
         for idx, char1 in enumerate(chars):
             if char1["char"] in CONTROL_LINE_BREAK_CHARS:
@@ -1110,6 +1126,9 @@ def chars_to_content(
 
             # 如果下一个char的x0和上一个char的x1距离超过0.25个字符宽度，则需要在中间插入一个空格
             role_text_parts.append((role1, char1["char"]))
+            position_records.append((char1["char"], tight_bboxes.get(char1.get("char_idx")) if tight_bboxes else None))
+            if position_records[-1][1] is None:
+                position_records[-1] = (char1["char"], char1.get("bbox"))
             if (
                 char2
                 and (
@@ -1125,11 +1144,16 @@ def chars_to_content(
             ):
                 space_role = role1 if role1 == role2 else "body"
                 role_text_parts.append((space_role, " "))
+                position_records.append((" ", None))
 
         content = _wrap_script_runs(role_text_parts)
         content = __replace_unicode(content)
         content = __replace_ligatures(content)
         span.content = content.strip()
+        if span.metadata.get("_collect_positions"):
+            from .positions import capture_words
+
+            capture_words(span, position_records)
         if any(role in {"sup", "sub"} and text for role, text in role_text_parts):
             span.metadata[PDF_NATIVE_SCRIPT_MARKUP_KEY] = True
 

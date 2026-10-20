@@ -136,6 +136,7 @@ def _process_flash_ocr(
     images_layout_res: list[list[dict[str, Any]]],
     *,
     np_images: list[np.ndarray] | None = None,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """使用本地 OCR 为 Flash layout block 填充正文和表格内容。"""
     from .ocr import _apply_ocr_rec_results, _ocr_det
@@ -174,6 +175,7 @@ def _process_flash_ocr(
             "flash",
             PIPELINE_DET_TYPE,
             local_model_context,
+            **({"positions": True} if positions else {}),
         )
     _fill_flash_ocr_table_contents(
         images_list,
@@ -196,6 +198,7 @@ def _process_text_and_formulas(
     page_vector_geometries: list[PDFPageVectorGeometry | None] | None = None,
     page_snapshots: PageSnapshotCache | None = None,
     np_images: list[np.ndarray] | None = None,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """在当前窗口内完成 OCR、公式、原生文本及 block 行信息回填。"""
     from .formulas import (
@@ -310,6 +313,7 @@ def _process_text_and_formulas(
             page_text_geometries,
             page_vector_geometries=page_vector_geometries,
             **({"page_snapshots": page_snapshots} if page_snapshots is not None else {}),
+            **({"positions": True} if positions else {}),
         )
 
 
@@ -490,6 +494,7 @@ def _finish_pdf_window(
     effort: AnalyzeEffort,
     parse_mode: Literal["txt", "ocr"],
     hybrid_model: HybridLocalModelContext,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """按原有顺序回填推理结果、文本公式与视觉素材。"""
     from .formulas import optimize_hybrid_formula_number_blocks
@@ -525,6 +530,7 @@ def _finish_pdf_window(
             local_model_context,
             images_layout_res,
             np_images=np_images,
+            **({"positions": True} if positions else {}),
         )
         # Flash OCR 在表内对象清理后复用统一公式编号合并，确保视觉裁图包含编号区域。
         for page_model_list in window_model_list:
@@ -542,6 +548,7 @@ def _finish_pdf_window(
             page_vector_geometries=state.page_vector_geometries,
             **({"page_snapshots": state.page_snapshots} if state.page_snapshots is not None else {}),
             np_images=np_images,
+            **({"positions": True} if positions else {}),
         )
 
     if effort in {"medium", "high"}:
@@ -588,6 +595,7 @@ def _process_pdf_window(
     image_analysis: bool,
     hybrid_model: HybridLocalModelContext | None,
     vlm_predictor: VlmPredictor | None,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """同步编排共享窗口阶段，在 VLM 等待期间释放本地模型执行锁。"""
     if hybrid_model is None:
@@ -613,7 +621,10 @@ def _process_pdf_window(
             else:
                 result = vlm_predictor.batch_two_step_extract(**options)
         with local_model_stage(hybrid_model.device):
-            return _finish_pdf_window(state, result, effort=effort, parse_mode=parse_mode, hybrid_model=hybrid_model)
+            return _finish_pdf_window(
+                state, result, effort=effort, parse_mode=parse_mode, hybrid_model=hybrid_model,
+                **({"positions": True} if positions else {}),
+            )
     finally:
         state.close()
 
@@ -648,10 +659,14 @@ def _finish_locked_window(
     effort: AnalyzeEffort,
     parse_mode: Literal["txt", "ocr"],
     hybrid_model: HybridLocalModelContext,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """回填阶段与同步入口共用本地模型执行锁。"""
     with local_model_stage(hybrid_model.device):
-        return _finish_pdf_window(state, result, effort=effort, parse_mode=parse_mode, hybrid_model=hybrid_model)
+        return _finish_pdf_window(
+            state, result, effort=effort, parse_mode=parse_mode, hybrid_model=hybrid_model,
+            **({"positions": True} if positions else {}),
+        )
 
 
 async def _run_window_prepare(prepare: Callable[[], None], render_session: PDFRenderSession | None) -> None:
@@ -682,6 +697,7 @@ async def aio_process_pdf_windows(
     image_analysis: bool,
     hybrid_model: HybridLocalModelContext,
     vlm_predictor: VlmPredictor,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """逐窗口原生异步推理；仅不同文档可交错推进，保留单文档内存上界。"""
     page_count = document.page_count
@@ -727,6 +743,7 @@ async def aio_process_pdf_windows(
                     effort=effort,
                     parse_mode=parse_mode,
                     hybrid_model=hybrid_model,
+                    **({"positions": True} if positions else {}),
                 )
             )
         except asyncio.CancelledError:
@@ -751,6 +768,7 @@ def process_pdf_windows(
     flash_txt_mode: bool,
     hybrid_model: HybridLocalModelContext | None,
     vlm_predictor: VlmPredictor | None,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """按固定阶段处理全部 PDF 窗口并返回完整 model-list。"""
     page_count = document.page_count
@@ -795,6 +813,7 @@ def process_pdf_windows(
                     image_analysis=image_analysis,
                     hybrid_model=hybrid_model,
                     vlm_predictor=vlm_predictor,
+                    **({"positions": True} if positions else {}),
                 )
             )
         finally:

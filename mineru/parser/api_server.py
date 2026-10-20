@@ -89,6 +89,7 @@ _LOCAL_PARSE_OUTPUT_FORMATS: tuple[OutputFormat, ...] = (
     "middle_json",
     "structured_content",
     "zip",
+    "markdown_map",
 )
 _BASE_PARSE_SOURCES: tuple[SourceType, ...] = ("file_id", "url", "inline")
 logger = logging.getLogger("mineru.parser.api_server")
@@ -153,6 +154,7 @@ OutputFormat = Literal[
     "latex",
     "docx",
     "zip",
+    "markdown_map",
 ]
 """Output artifact formats."""
 
@@ -531,6 +533,7 @@ class OutputFiles(BaseModel):
     latex: OutputFileRef | None = None
     docx: OutputFileRef | None = None
     zip: OutputFileRef | None = None
+    markdown_map: OutputFileRef | None = None
 
 
 class JobFileResult(BaseModel):
@@ -1761,6 +1764,7 @@ async def _run_job(
                     page_range=page_range,
                     source_context=source_context,
                     vlm_config=vlm_config,
+                    **({"positions": True} if "markdown_map" in rec.output_formats else {}),
                 )
 
                 if rec.status in {"canceled", "failed"}:
@@ -1768,6 +1772,16 @@ async def _run_job(
                 # collect outputs
                 out_formats = set(rec.output_formats)
                 output_files = OutputFiles()
+                mapped_markdown = None
+                if "markdown_map" in out_formats:
+                    mapped_markdown, source_map = await run_sync(result.markdown_with_map)
+                    content_bytes = _json_utf8_bytes(source_map)
+                    sha = hashlib.sha256(content_bytes).hexdigest()
+                    file_store.store_blob(content_bytes, sha256hex=sha)
+                    fid = file_store.create_file_for_output(
+                        f"{fr.name}.markdown_map.json", content_bytes, sha256hex=sha, job_id=rec.id
+                    )
+                    output_files.markdown_map = OutputFileRef(file_id=fid, bytes=len(content_bytes))
 
                 for fmt in (
                     "markdown",
@@ -1777,7 +1791,7 @@ async def _run_job(
                     if fmt not in out_formats:
                         continue
                     if fmt == "markdown":
-                        md = await run_sync(result.markdown)
+                        md = mapped_markdown if mapped_markdown is not None else await run_sync(result.markdown)
                         content_bytes = _text_utf8_bytes(md or "")
                         sha = hashlib.sha256(content_bytes).hexdigest()
                         file_store.store_blob(content_bytes, sha256hex=sha)

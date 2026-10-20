@@ -9,11 +9,17 @@
 | `mineru parse` | Markdown; `--json` is a command response with status, content, locators, and continuation |
 | `mineru read` | Markdown or `--format image`; cached content only |
 | `mineru-kit parse` | `markdown`, `middle_json`, `zip` |
-| Self-hosted V1 API | `markdown`, `middle_json`, `structured_content`, `zip`; consult service capabilities |
-| `ParseResult` | `markdown()`, `structured_content()`, `to_dict()`, `to_json()`, `save(writer)` |
+| Self-hosted V1 API | `markdown`, `markdown_map`, `middle_json`, `structured_content`, `zip`; consult service capabilities |
+| `ParseResult` | `markdown()`, `markdown_with_map()`, `markdown_map()`, `structured_content()`, `to_dict()`, `to_json()`, `save(writer)` |
 | `mineru.render.render()` | The nine targets below |
 
 A `mineru parse --json` response is not MiddleJson and cannot be passed directly to `ParseResult.from_dict()`. Remote output availability is defined by the remote service.
+
+## Markdown source map
+
+The optional `markdown_map` API artifact stores a hash of the paired Markdown UTF-8 bytes
+and page/box/range mappings. Offsets are global Unicode code points and end-exclusive.
+See [Markdown Map](markdown_map.md) for the contract and examples.
 
 ## ZIP image names
 

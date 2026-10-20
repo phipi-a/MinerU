@@ -350,6 +350,8 @@ def _apply_block_content_and_line_metadata(
     page_model_list: list[dict[str, Any]],
     block_lines: dict[int, list[_AnalyzeLine]],
     page_size: tuple[float, float],
+    *,
+    positions: bool = False,
 ) -> None:
     """将组行结果回填到 block，并为正文、视觉标题和视觉脚注保存行框。"""
     for block_item in page_model_list:
@@ -366,6 +368,10 @@ def _apply_block_content_and_line_metadata(
         has_nonempty_content = bool(block_content.strip()) if isinstance(block_content, str) else bool(block_content)
         if not has_nonempty_content:
             block_item["content"] = _lines_to_block_content(lines, block_type)
+            if positions:
+                from .positions import capture_block_positions
+
+                capture_block_positions(block_item, lines, page_size)
             if _lines_have_native_script_markup(lines):
                 block_item[PDF_NATIVE_SCRIPT_MARKUP_KEY] = True
 
@@ -387,6 +393,7 @@ def _fill_window_block_content_and_lines(
     *,
     page_vector_geometries: list[PDFPageVectorGeometry | None] | None = None,
     page_snapshots: PageSnapshotCache | None = None,
+    positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
     """按页完成 span 回填与行级元数据构造，返回不含页面级 sidecar 的 model list。"""
     page_counts = {
@@ -434,6 +441,9 @@ def _fill_window_block_content_and_lines(
             page_size,
             render_scale,
         )
+        if positions:
+            for span in page_spans:
+                span.metadata["_collect_positions"] = True
         inline_math_regions = _get_page_inline_formula_regions(
             page_inline_formula_list,
             page_size,
@@ -535,8 +545,24 @@ def _fill_window_block_content_and_lines(
             page_model_list,
             block_lines,
             page_size,
+            positions=positions,
         )
         apply_text_evidence(page_model_list, evidence)
+        if positions:
+            from ..normalization import _natural_language_spans
+            from .positions import content_signature
+
+            for block in page_model_list:
+                original = block.get("_position_content")
+                current = block.get("content")
+                if isinstance(original, str) and isinstance(current, list):
+                    before = content_signature(_natural_language_spans(original))
+                    after = content_signature(current)
+                    if before == after:
+                        # Styling and typed-span grouping preserve the emitted character stream.
+                        from copy import deepcopy
+
+                        block["_position_content"] = deepcopy(current)
     return model_list
 
 

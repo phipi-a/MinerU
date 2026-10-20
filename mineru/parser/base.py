@@ -85,6 +85,17 @@ class ParseResult:
     def structured_content(self, *, asset_base_url: str = "") -> dict[str, Any]:
         return render_structured_content(self.middle_json, asset_base_url=asset_base_url)
 
+    def markdown_with_map(self) -> tuple[str, dict[str, Any]]:
+        """Return default Markdown and a standalone UTF-8 SHA-256/box source map."""
+        from .markdown_map import render_markdown_map
+        from .positioned import positioned_document
+
+        return render_markdown_map(self.middle_json, positioned_document(self.middle_json, self._model_output))
+
+    def markdown_map(self) -> dict[str, Any]:
+        """Return only the source map; offsets use Unicode codepoints, end exclusive."""
+        return self.markdown_with_map()[1]
+
     def save(self, writer: DataWriter) -> None:
         """在副本上外置并校验素材，再保存可离线重渲染的协议及原始图片字节。"""
         from docvortex.export import materialize_middle, validate_materialized_assets
