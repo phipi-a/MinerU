@@ -268,8 +268,8 @@ def test_pure_map_translates_inline_markup_and_unicode() -> None:
     before = result.middle_json.to_dict(skip_defaults=False)
     markdown, mapping = result.markdown_with_map(pure_markdown=True)
     assert markdown == result.markdown(pure_markdown=True)
-    assert markdown == "😀A1 **café**"
-    assert slices(markdown, mapping) == ["😀A1", "**café**"]
+    assert markdown == "😀A^1 **café**"
+    assert slices(markdown, mapping) == ["😀A^1", "**café**"]
     assert mapping["markdown_sha256"] == hashlib.sha256(markdown.encode()).hexdigest()
     assert result.middle_json.to_dict(skip_defaults=False) == before
 
@@ -299,7 +299,11 @@ def test_pure_map_flattens_complex_table_conservatively() -> None:
     assert "| Title |" in markdown
     block = mapping["pages"][0]["blocks"][0]
     assert block["level"] == "block"
-    assert block["lines"] == block["elements"] == []
+    assert block["lines"] == []
+    # A flattened table owns only its whole block range; no cell positions are invented.
+    assert [(e["level"], e["markdown_char_start"], e["markdown_char_end"]) for e in block["elements"]] == [
+        ("block", block["markdown_char_start"], block["markdown_char_end"])
+    ]
     assert "| Title |" in markdown[block["markdown_char_start"] : block["markdown_char_end"]]
     assert slices(markdown, mapping)[-2:] == ["After", "table"]
 

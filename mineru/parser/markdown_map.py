@@ -63,13 +63,17 @@ def _template(rendered: str) -> tuple[str, str] | None:
     return prefix, suffix
 
 
-def _text_boundaries(span: TextSpan, cuts: set[int]) -> tuple[str, dict[int, int], dict[int, int]] | None:
+def _text_boundaries(span: TextSpan, cuts: set[int], *, pure: bool) -> tuple[str, dict[int, int], dict[int, int]] | None:
     """Locate owned character boundaries through exact compositional render checks."""
     delimiters = config.render.latex_delimiters
-    rendered = render_inline_content([span], delimiters)
+
+    def emit(spans: list[Any]) -> str:
+        return render_inline_content(spans, delimiters, pure_markdown=pure)
+
+    rendered = emit([span])
     plain = span.model_copy(update={"styles": []})
-    raw = render_inline_content([plain], delimiters)
-    template = _template(render_inline_content([span.model_copy(update={"content": _PROBE})], delimiters))
+    raw = emit([plain])
+    template = _template(emit([span.model_copy(update={"content": _PROBE})]))
     if template is None:
         return None
     opening, closing = template
@@ -77,16 +81,16 @@ def _text_boundaries(span: TextSpan, cuts: set[int]) -> tuple[str, dict[int, int
         opening = closing = ""
     leading = 0 if not opening else len(span.content) - len(span.content.lstrip(" \t"))
     core_end = len(span.content) if not opening else len(span.content.rstrip(" \t"))
-    prefix = render_inline_content([plain.model_copy(update={"content": span.content[:leading]})], delimiters)
-    core = render_inline_content([plain.model_copy(update={"content": span.content[leading:core_end]})], delimiters)
-    suffix = render_inline_content([plain.model_copy(update={"content": span.content[core_end:]})], delimiters)
+    prefix = emit([plain.model_copy(update={"content": span.content[:leading]})])
+    core = emit([plain.model_copy(update={"content": span.content[leading:core_end]})])
+    suffix = emit([plain.model_copy(update={"content": span.content[core_end:]})])
     if prefix + core + suffix != raw or prefix + opening + core + closing + suffix != rendered:
         return None  # whitespace rewriting, context-sensitive escaping, or unsupported styles
     starts: dict[int, int] = {}
     ends: dict[int, int] = {}
     for cut in cuts | {0, len(span.content)}:
-        left = render_inline_content([plain.model_copy(update={"content": span.content[:cut]})], delimiters)
-        right = render_inline_content([plain.model_copy(update={"content": span.content[cut:]})], delimiters)
+        left = emit([plain.model_copy(update={"content": span.content[:cut]})])
+        right = emit([plain.model_copy(update={"content": span.content[cut:]})])
         if left + right != raw:
             return None  # no guess about an escape that crosses this source boundary
         position = len(left)
@@ -104,6 +108,7 @@ def _fine_ranges(
     tokens: list[dict[str, Any]],
     rendered: str,
     *,
+    pure: bool,
     inline_only: bool = False,
 ) -> list[dict[str, Any]] | None:
     content = block.content
@@ -134,13 +139,15 @@ def _fine_ranges(
     else:
         probe = block.model_copy(update={"content": [TextSpan(type="text", content=_PROBE)]})
         try:
-            template = _template(render_single_block(probe, delimiters=delimiters, asset_base_url="").strip("\n"))
+            template = _template(
+                render_single_block(probe, delimiters=delimiters, asset_base_url="", pure_markdown=pure).strip("\n")
+            )
         except TypeError:
             return None
     if template is None:
         return None
     opening, closing = template
-    inline = render_inline_content(content, delimiters)
+    inline = render_inline_content(content, delimiters, pure_markdown=pure)
     if opening + inline + closing != rendered:
         return None
     starts: dict[int, int] = {}
@@ -153,12 +160,12 @@ def _fine_ranges(
         length = len(span.content) if span.type == "text" else len(f"\\({span.content}\\)")
         local_cuts = {cut - logical_cursor for cut in cuts if logical_cursor <= cut <= logical_cursor + length}
         if span.type == "text":
-            traced = _text_boundaries(span, local_cuts)
+            traced = _text_boundaries(span, local_cuts, pure=pure)
             if traced is None:
                 return None
             piece, local_starts, local_ends = traced
         else:
-            piece = render_inline_content([span], delimiters)
+            piece = render_inline_content([span], delimiters, pure_markdown=pure)
             if local_cuts - {0, length}:
                 return None  # formulas are atomic
             local_starts = local_ends = {0: 0, length: len(piece)}
@@ -197,6 +204,8 @@ def _list_ranges(
     visible: list[tuple[int, int, Any]],
     text: str,
     entries: dict[str, Any],
+    *,
+    pure: bool,
 ) -> list[tuple[int, dict[str, Any]]] | None:
     """Refine flat list emissions, including verified continued reference lists.
 
@@ -210,7 +219,7 @@ def _list_ranges(
         for c, child in enumerate(block.content):
             if child.type == "list":
                 return None
-            piece = render_inline_content(child.content, config.render.latex_delimiters)
+            piece = render_inline_content(child.content, config.render.latex_delimiters, pure_markdown=pure)
             if not piece:
                 continue
             leaves.append((p, child, f"/pages/{p}/blocks/{b}/content/{c}", piece))
@@ -222,7 +231,7 @@ def _list_ranges(
         if offset:
             cursor += 1
         source = entries.get(pointer)
-        fine = _fine_ranges(child, source["tokens"], piece) if source and source["source"] == "analysis" else None
+        fine = _fine_ranges(child, source["tokens"], piece, pure=pure) if source and source["source"] == "analysis" else None
         if not fine and child.bbox is not None:
             fine = [{"bbox": list(child.bbox), "level": "block", "markdown_char_start": 0, "markdown_char_end": len(piece)}]
         for item in fine or []:
@@ -274,6 +283,8 @@ def _continuation_ranges(
     group: list[tuple[int, int, Any]],
     text: str,
     entries: dict[str, Any],
+    *,
+    pure: bool,
 ) -> list[tuple[int, dict[str, Any]]] | None:
     """Trace physical paragraph fragments through the public document renderer.
 
@@ -295,12 +306,12 @@ def _continuation_ranges(
             traced[index] = (p, b, block)
         else:
             marked.append((p, b, block))
-            piece = render_markdown(_document(middle, [(p, b, block)]))
+            piece = render_markdown(_document(middle, [(p, b, block)]), pure_markdown=pure)
             if piece:
                 opaque.append((p, b, block, piece))
     if not traced:
         return None
-    probe = render_markdown(_document(middle, marked))
+    probe = render_markdown(_document(middle, marked), pure_markdown=pure)
     intervals = _marker_intervals(probe, text, set(traced))
     if intervals is None:
         return None
@@ -334,7 +345,11 @@ def _continuation_ranges(
             continue
         pointer = f"/pages/{p}/blocks/{b}"
         entry = entries.get(pointer)
-        fine = _fine_ranges(block, entry["tokens"], text[start:end]) if entry and entry["source"] == "analysis" else None
+        fine = (
+            _fine_ranges(block, entry["tokens"], text[start:end], pure=pure)
+            if entry and entry["source"] == "analysis"
+            else None
+        )
         if not fine and block.bbox is not None:
             fine = [
                 {
@@ -356,15 +371,18 @@ def _continuation_ranges(
 def render_markdown_map(
     middle: MiddleJson, positioned: dict[str, Any], *, pure_markdown: bool = False
 ) -> tuple[str, dict[str, Any]]:
-    """Return unchanged default Markdown and its standalone box/range map.
+    """Return Markdown and its standalone box/range map.
+
+    With pure_markdown every probe uses the shared renderer's HTML-free dialect,
+    so ranges are verified directly against the emitted GFM.
 
     Continuations lacking a public ownership trace use an explicitly marked group
     range: all boxes in that group refer to the shared logical output, not to an
     invented word subdivision. No private DocVortex implementation is imported.
     """
-    markdown = render_markdown(middle)
+    markdown = render_markdown(middle, pure_markdown=pure_markdown)
     groups = _groups(middle)
-    emissions = [render_markdown(_document(middle, group)) for group in groups]
+    emissions = [render_markdown(_document(middle, group), pure_markdown=pure_markdown) for group in groups]
     if "\n\n".join(part for part in emissions if part) != markdown:
         # Global anchors or other context-sensitive document operations cannot
         # safely be split through the installed dependency's public interface.
@@ -381,7 +399,9 @@ def render_markdown_map(
             cursor += 2
         start, end = cursor, cursor + len(text)
         visible = [(p, b, block) for p, b, block in group if block.type not in PAGE_AUXILIARY_BLOCK_TYPES]
-        list_ranges = _continuation_ranges(middle, group, text, entries) or _list_ranges(visible, text, entries)
+        list_ranges = _continuation_ranges(middle, group, text, entries, pure=pure_markdown) or _list_ranges(
+            visible, text, entries, pure=pure_markdown
+        )
         fine = list_ranges
         if list_ranges:
             for p, item in list_ranges:
@@ -393,7 +413,7 @@ def render_markdown_map(
             p, b, block = visible[0]
             entry = entries.get(f"/pages/{p}/blocks/{b}")
             if entry is not None and entry["source"] == "analysis":
-                fine = _fine_ranges(block, entry["tokens"], text)
+                fine = _fine_ranges(block, entry["tokens"], text, pure=pure_markdown)
             if fine:
                 for item in fine:
                     item["markdown_char_start"] += start
@@ -419,7 +439,7 @@ def render_markdown_map(
         emitted = True
     assert cursor == len(markdown)
     _hierarchy(pages, middle, entries)
-    _caption_children(pages, middle, entries, markdown)
+    _caption_children(pages, middle, entries, markdown, pure=pure_markdown)
     mapping = {
         "version": 2,
         "markdown_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
@@ -428,37 +448,7 @@ def render_markdown_map(
         "bbox_units": "normalized",
         "pages": pages,
     }
-    if pure_markdown:
-        return _convert_pure_map(markdown, mapping)
     return markdown, mapping
-
-
-def _convert_pure_map(markdown: str, mapping: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """Translate verified ranges through the shared renderer's explicit edit trace."""
-    from docvortex.render.pure_markdown import convert_to_pure_markdown
-
-    converted = convert_to_pure_markdown(markdown)
-
-    def translate(item: dict[str, Any]) -> bool:
-        start, end = item["markdown_char_start"], item["markdown_char_end"]
-        coarse = converted.coarsens_range(start, end)
-        item["markdown_char_start"], item["markdown_char_end"] = converted.translate_range(start, end)
-        if "token_id" in item:
-            prefix = item["token_id"].rsplit("/tokens/", 1)[0]
-            item["token_id"] = f"{prefix}/tokens/{item['markdown_char_start']}:{item['markdown_char_end']}"
-        if coarse:
-            item["level"] = "group" if item.get("level") == "group" else "block" if item.get("bbox") else "unavailable"
-            item["lines"] = []
-            item["elements"] = []
-        for key in ("lines", "elements", "children"):
-            if key in item:
-                item[key] = [child for child in item[key] if translate(child)]
-        return item["markdown_char_start"] < item["markdown_char_end"]
-
-    for page in mapping["pages"]:
-        page["blocks"] = [block for block in page["blocks"] if translate(block)]
-    mapping["markdown_sha256"] = hashlib.sha256(converted.markdown.encode("utf-8")).hexdigest()
-    return converted.markdown, mapping
 
 
 def _hierarchy(pages: list[dict[str, Any]], middle: MiddleJson, entries: dict[str, Any]) -> None:
@@ -531,6 +521,8 @@ def _caption_children(
     middle: MiddleJson,
     entries: dict[str, Any],
     markdown: str,
+    *,
+    pure: bool,
 ) -> None:
     """Retain caption identity under its visual parent, with verified ownership.
 
@@ -563,7 +555,7 @@ def _caption_children(
                         }
                     )
                 marked = block.model_copy(update={"content": children})
-                probe = render_markdown(_document(middle, [(p, b, marked)]))
+                probe = render_markdown(_document(middle, [(p, b, marked)]), pure_markdown=pure)
                 intervals = _marker_intervals(probe, text, set(captions))
             owned = {c: (left + start, right + start) for left, right, c in intervals or []}
             mapped = []
@@ -575,7 +567,7 @@ def _caption_children(
                 entry = entries.get(pointer)
                 fine = None
                 if c in owned and entry and entry["source"] == "analysis":
-                    fine = _fine_ranges(child, entry["tokens"], markdown[left:right], inline_only=True)
+                    fine = _fine_ranges(child, entry["tokens"], markdown[left:right], pure=pure, inline_only=True)
                 if not fine:
                     fine = [
                         {
