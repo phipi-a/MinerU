@@ -460,9 +460,9 @@ def test_v1_client_full_asgi_upload_job_poll_and_zip(
 
     original_zip = parser_api_server._build_self_contained_zip_output
 
-    def export(result: ParseResult) -> bytes:
+    def export(result: ParseResult, **kwargs: Any) -> bytes:
         """真实生成 ZIP，仅用确定性时钟模拟结果打包耗时。"""
-        payload = original_zip(result)
+        payload = original_zip(result, **kwargs)
         clock[0] += export_seconds
         return payload
 

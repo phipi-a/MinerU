@@ -6,8 +6,9 @@ import json
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
+from collections.abc import Collection
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 from ..render import render_markdown, render_structured_content
 from ..render.contracts import ImageRenderer, RenderMode
@@ -15,6 +16,14 @@ from ..types import MiddleJson, ModelJson, PageInfo
 from .writer import DataWriter
 
 MIDDLE_JSON_SCHEMA_VERSION: str = MiddleJson.model_fields["schema_version"].default
+
+ResultFile = Literal["markdown", "middle_json", "structured_content", "markdown_map", "model_output"]
+"""Files a saved result bundle can contain."""
+
+DEFAULT_RESULT_FILES: frozenset[ResultFile] = frozenset({"markdown", "middle_json", "structured_content", "model_output"})
+"""Self-contained bundle; ``model_output`` is written only when the result carries one."""
+
+_ASSET_REFERENCING_FILES: frozenset[ResultFile] = frozenset({"markdown", "middle_json", "structured_content"})
 
 
 @dataclass
@@ -100,30 +109,44 @@ class ParseResult:
         """Return only the source map; offsets use Unicode codepoints, end exclusive."""
         return self.markdown_with_map(pure_markdown=pure_markdown)[1]
 
-    def save(self, writer: DataWriter, *, include_markdown_map: bool = False, pure_markdown: bool = False) -> None:
-        """Save local assets and optionally a source map paired with the exported Markdown."""
+    def save(
+        self,
+        writer: DataWriter,
+        *,
+        files: Collection[ResultFile] = DEFAULT_RESULT_FILES,
+        pure_markdown: bool = False,
+    ) -> None:
+        """Save the selected files plus the local assets they reference.
+
+        ``markdown_map`` pairs with the bundled ``markdown.md``; ``model_output`` is skipped when absent.
+        """
         from docvortex.export import materialize_middle, validate_materialized_assets
 
+        selected = frozenset(files)
+        unknown = selected - frozenset(get_args(ResultFile))
+        if unknown:
+            raise ValueError(f"Unsupported result files: {sorted(unknown)}")
         middle_json, assets = materialize_middle(self.middle_json)
         validate_materialized_assets(middle_json, assets)
         exported = ParseResult(middle_json=middle_json, _model_output=self._model_output)
-        markdown, source_map = (
-            exported.markdown_with_map(pure_markdown=pure_markdown)
-            if include_markdown_map
-            else (exported.markdown(pure_markdown=pure_markdown), None)
-        )
-        text_files = {
-            "markdown.md": markdown,
-            "middle_json.json": exported.to_json(),
-            "structured_content.json": json.dumps(exported.structured_content(), ensure_ascii=False, indent=2),
-        }
-        if source_map is not None:
+        text_files: dict[str, str] = {}
+        if "markdown_map" in selected:
+            markdown, source_map = exported.markdown_with_map(pure_markdown=pure_markdown)
+            if "markdown" in selected:
+                text_files["markdown.md"] = markdown
             text_files["markdown_map.json"] = json.dumps(source_map, ensure_ascii=False, indent=2)
-
-        if self._model_output is not None:
+        elif "markdown" in selected:
+            text_files["markdown.md"] = exported.markdown(pure_markdown=pure_markdown)
+        if "middle_json" in selected:
+            text_files["middle_json.json"] = exported.to_json()
+        if "structured_content" in selected:
+            text_files["structured_content.json"] = json.dumps(exported.structured_content(), ensure_ascii=False, indent=2)
+        if "model_output" in selected and self._model_output is not None:
             validate_mineru_metadata(self._model_output)
             model_output = self._model_output.to_dict(skip_defaults=False)
             text_files["model_output.json"] = json.dumps(model_output, ensure_ascii=False, indent=2)
+        if not selected & _ASSET_REFERENCING_FILES:
+            assets = {}
 
         # 所有引用和序列化均先完成，避免缺失素材时写出貌似完整的结果包。
         for path, content in text_files.items():

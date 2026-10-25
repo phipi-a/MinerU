@@ -19,7 +19,7 @@ from copy import deepcopy
 from typing import Any
 
 from mineru.parser import api_server
-from mineru.parser.base import ParseResult
+from mineru.parser.base import DEFAULT_RESULT_FILES, ParseResult
 from mineru.types import MiddleJson, ModelJson
 
 
@@ -150,7 +150,8 @@ def test_saved_map_preserves_model_position_provenance(tmp_path: Path, include_m
         metadata=result.middle_json.metadata,
         extensions={"mineru_position_sources": result.middle_json.extensions.pop("mineru_position_sources")},
     )
-    result.save(FileBasedDataWriter(str(tmp_path)), include_markdown_map=include_map, pure_markdown=pure_markdown)
+    files = DEFAULT_RESULT_FILES | ({"markdown_map"} if include_map else set())
+    result.save(FileBasedDataWriter(str(tmp_path)), files=files, pure_markdown=pure_markdown)
     assert (tmp_path / "markdown_map.json").exists() is include_map
     markdown_bytes = (tmp_path / "markdown.md").read_bytes()
     assert markdown_bytes.decode() == ("😀 café" if pure_markdown else "<u>😀 café</u>")
@@ -240,9 +241,15 @@ def test_rest_map_is_a_separate_artifact(
             ref = outputs["zip"]
             archive_bytes = client.get(f"/v1/files/{ref['file_id']}/content").content
             with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-                markdown_bytes = archive.read("markdown.md")
                 bundled_map = json.loads(archive.read("markdown_map.json"))
                 images = [name for name in archive.namelist() if name.startswith("images/")]
+                if not include_markdown:
+                    # Only requested files are bundled; the map alone references no images.
+                    assert archive.namelist() == ["markdown_map.json"]
+                    assert bundled_map["markdown_sha256"] != mapping["markdown_sha256"]
+                    return
+                assert sorted(set(archive.namelist()) - set(images)) == ["markdown.md", "markdown_map.json"]
+                markdown_bytes = archive.read("markdown.md")
                 assert len(images) == 1
                 assert archive.read(images[0]) == base64.b64decode(image_base64)
                 markdown = markdown_bytes.decode("utf-8")
@@ -335,8 +342,29 @@ def test_pure_markdown_job_without_map(tmp_path: Path, monkeypatch: pytest.Monke
         assert file_store.read_file_data(outputs.markdown.file_id).decode() == "Plain café"
     else:
         with zipfile.ZipFile(io.BytesIO(file_store.read_file_data(outputs.zip.file_id))) as archive:
+            # Requesting only zip keeps the self-contained bundle.
             assert archive.read("markdown.md").decode() == "Plain café"
-            assert "markdown_map.json" not in archive.namelist()
+            assert sorted(archive.namelist()) == ["markdown.md", "middle_json.json", "structured_content.json"]
+
+
+@pytest.mark.parametrize(
+    ("output_formats", "expected"),
+    [
+        (["zip", "markdown"], ["markdown.md"]),
+        (["zip", "middle_json", "structured_content"], ["middle_json.json", "structured_content.json"]),
+        (["zip", "markdown", "markdown_map"], ["markdown.md", "markdown_map.json"]),
+    ],
+)
+def test_zip_bundles_only_requested_formats(output_formats: list[str], expected: list[str]) -> None:
+    result = make_result([{"type": "text", "content": "Plain café"}])
+    files = api_server._zip_result_files(output_formats)
+    with zipfile.ZipFile(io.BytesIO(api_server._build_self_contained_zip_output(result, files=files))) as archive:
+        assert sorted(archive.namelist()) == expected
+
+
+def test_result_save_rejects_unknown_files() -> None:
+    with pytest.raises(ValueError, match="Unsupported result files"):
+        make_result([{"type": "text", "content": "x"}]).save(api_server._ZipDataWriter(None), files=["html"])
 
 
 def test_flat_reference_list_preserves_leaf_word_ranges() -> None:

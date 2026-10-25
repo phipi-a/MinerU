@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections.abc import Collection
 from typing import Annotated, Any, AsyncIterator, Awaitable, Callable, Literal, NoReturn, TypedDict
 from urllib.parse import urlparse
 
@@ -59,7 +60,7 @@ from ..utils.logger import configure_global_log_level
 from ..utils.stdio import configure_standard_streams
 from ..version import __version__
 from . import parse_async
-from .base import ParseResult
+from .base import DEFAULT_RESULT_FILES, ParseResult, ResultFile
 from .page_range import (
     PAGE_RANGE_DESCRIPTION,
     normalize_page_range_input,
@@ -91,6 +92,7 @@ _LOCAL_PARSE_OUTPUT_FORMATS: tuple[OutputFormat, ...] = (
     "zip",
     "markdown_map",
 )
+_ZIP_BUNDLED_FORMATS: frozenset[ResultFile] = frozenset({"markdown", "middle_json", "structured_content", "markdown_map"})
 _BASE_PARSE_SOURCES: tuple[SourceType, ...] = ("file_id", "url", "inline")
 logger = logging.getLogger("mineru.parser.api_server")
 
@@ -1170,13 +1172,19 @@ class FileStore:
         app_state.file_store = self
 
 
+def _zip_result_files(output_formats: Collection[str]) -> frozenset[ResultFile]:
+    """ZIP 只打包显式请求的格式；仅请求 zip 时保持自包含结果包。"""
+    requested = frozenset(output_formats) & _ZIP_BUNDLED_FORMATS
+    return requested or DEFAULT_RESULT_FILES
+
+
 def _build_self_contained_zip_output(
-    result: ParseResult, *, include_markdown_map: bool = False, pure_markdown: bool = False
+    result: ParseResult, *, files: Collection[ResultFile] = DEFAULT_RESULT_FILES, pure_markdown: bool = False
 ) -> bytes:
-    """构建自包含解析 zip，确保只请求 zip 时也能恢复 middle_json、图片和 model_output。"""
+    """构建解析 zip；默认自包含，确保只请求 zip 时也能恢复 middle_json、图片和 model_output。"""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        result.save(_ZipDataWriter(zf), include_markdown_map=include_markdown_map, pure_markdown=pure_markdown)
+        result.save(_ZipDataWriter(zf), files=files, pure_markdown=pure_markdown)
     return buf.getvalue()
 
 
@@ -1824,7 +1832,7 @@ async def _run_job(
                     zip_bytes = await run_sync(
                         _build_self_contained_zip_output,
                         result,
-                        include_markdown_map="markdown_map" in out_formats,
+                        files=_zip_result_files(out_formats),
                         pure_markdown=req.pure_markdown,
                     )
                     zip_sha = hashlib.sha256(zip_bytes).hexdigest()

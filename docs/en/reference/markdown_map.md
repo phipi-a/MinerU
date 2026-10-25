@@ -14,20 +14,24 @@ The map is registered as a job output and follows the same retention policy as
 Markdown and other artifacts. Its retention period starts after job cleanup;
 download the paired files before they expire.
 
-For an offline download with local images, request both formats:
+For an offline download with local images, request the Markdown, the map, and
+the ZIP:
 
 ```json
-{"output_formats": ["zip", "markdown_map"]}
+{"output_formats": ["zip", "markdown", "markdown_map"]}
 ```
 
-Download `output_files.zip` and extract it. The archive contains `markdown.md`,
-`markdown_map.json`, and local image assets under `images/`, alongside the usual
-structured result files. The bundled map is generated after images are
-materialized, so its hash and offsets match the exact `markdown.md` inside the
-archive. Keep the extracted directory structure to preserve relative image links.
-The separately returned `output_files.markdown_map` still maps the standalone
-Markdown output; image paths can differ, so use the map bundled with the ZIP for
-the bundled Markdown. Requesting only `zip` does not add a map.
+When `zip` is requested together with other formats, the archive contains exactly
+those formats plus the images they reference: here `markdown.md`,
+`markdown_map.json`, and local image assets under `images/`. Requesting only
+`zip` keeps the self-contained bundle (`markdown.md`, `middle_json.json`,
+`structured_content.json`, `images/`, and `model_output.json` when available)
+without a map. The bundled map is generated after images are materialized, so its
+hash and offsets match the exact `markdown.md` inside the archive. Keep the
+extracted directory structure to preserve relative image links. The separately
+returned `output_files.markdown_map` still maps the standalone Markdown output;
+image paths can differ, so use the map bundled with the ZIP for the bundled
+Markdown.
 
 To select HTML-free Markdown for both standalone outputs and the ZIP, add the
 `pure_markdown` option to the job request:
@@ -46,20 +50,21 @@ bundle. The option also works on `/v1/tasks` and `/v1/file_parse`; multipart/raw
 uploads accept `pure_markdown=true` as a query parameter and repeated
 `output_formats=zip&output_formats=markdown_map` parameters.
 
-The HTML-free variant uses GFM tables and strikethrough. Unsupported visual
-styles become plain text, collapsible sections are expanded, and complex tables
-lose merged cell spans. Code and formula literals retain their contents, including
+The HTML-free variant uses GFM tables and strikethrough. Superscripts and
+subscripts become `^`/`_` prefixes, other unsupported visual styles become plain
+text, collapsible sections are expanded, algorithms become fenced code, and complex
+tables lose merged cell spans. Code and formula literals retain their contents, including
 literal angle brackets. Custom HTML anchor targets are removed. The document's
 semantic representation and other output formats are unchanged. Remote image
 URLs are not downloaded automatically.
 
-The map is translated through DocVortex's explicit edit trace and hashed against
-the final Markdown bytes. Table/code structure replacements use conservative
-block ranges instead of retaining unsupported fine-grained positions. The default
+DocVortex's Markdown renderer emits the HTML-free dialect directly, so the map
+is built and verified against the same rendered GFM and hashed against the final
+Markdown bytes; there is no post-processing edit trace. The default
 `pure_markdown=false` preserves the existing HTML-enhanced Markdown behavior.
 
-The pinned DocVortex dependency includes the shared
-`docvortex.render.pure_markdown` API. For development against a local checkout,
+The pinned DocVortex dependency provides `pure_markdown` on `render_markdown`,
+`render_single_block`, and `docvortex.render.fragments.render_inline_content`. For development against a local checkout,
 install it with `uv pip install --python .venv/bin/python --no-deps -e ../DocVortex`.
 
 ```json

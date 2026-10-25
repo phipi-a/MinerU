@@ -212,7 +212,7 @@ Round-trip current results with `ParseResult.from_json(result.to_json())`. Legac
 
 ## Saved files, ZIP, and assets
 
-`ParseResult.save(writer)` materializes images on a document copy and writes `markdown.md`, `middle_json.json`, `structured_content.json`, and `images/`, plus `model_output.json` when raw model output exists. Self-hosted V1 API ZIP output and `mineru-kit parse --format zip` share this save path. All three consumer formats reference the same assets; image bytes, source page indices, block indices, and rotation metadata are preserved.
+`ParseResult.save(writer)` materializes images on a document copy and writes `markdown.md`, `middle_json.json`, `structured_content.json`, and `images/`, plus `model_output.json` when raw model output exists. Self-hosted V1 API ZIP output and `mineru-kit parse --format zip` share this save path. `ParseResult.save(writer, files=...)` writes only the selected files and the images they reference; a V1 API request that combines `zip` with other output formats bundles exactly those formats, while a request for `zip` alone keeps the full bundle. All three consumer formats reference the same assets; image bytes, source page indices, block indices, and rotation metadata are preserved.
 
 ```python
 from mineru.parser.writer import FileBasedDataWriter

@@ -205,7 +205,8 @@ def test_documented_task_script(live_service: str, tmp_path: Path, mode: str, fo
         assert result["files"][0]["name"] == source.name
         assert "中文内容" in result["files"][0]["content"]["markdown"]
     else:
-        assert "middle_json.json" in _archive_members(output.read_bytes())
+        # The script requests markdown explicitly, so the ZIP bundles only that format.
+        assert list(_archive_members(output.read_bytes())) == ["markdown.md"]
 
 
 @pytest.mark.parametrize("document", ["html", "pdf"])

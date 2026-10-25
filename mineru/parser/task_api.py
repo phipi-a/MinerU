@@ -180,8 +180,10 @@ async def _prepare_submission(
             if params:
                 _invalid("JSON parse options must be supplied in the request body")
             body = CreateJobRequest.model_validate(await request.json())
+            explicit_formats = "output_formats" in body.model_fields_set
         else:
-            if "output_formats" in params:
+            explicit_formats = "output_formats" in params
+            if explicit_formats:
                 params["output_formats"] = request.query_params.getlist("output_formats")
             options = UploadTaskOptions.model_validate(params)
             options.page_range = normalize_page_range_input(options.page_range)
@@ -250,7 +252,10 @@ async def _prepare_submission(
             fmt not in {"markdown", "markdown_map", "middle_json", "structured_content", "zip"} for fmt in body.output_formats
         ):
             _invalid("Unsupported output format", code="unsupported_output_format", param="output_formats")
-        if force_zip and "zip" not in body.output_formats:
+        if force_zip and not explicit_formats:
+            # 同步 ZIP 未显式指定格式时返回自包含结果包，而不是只含默认 Markdown 的 ZIP。
+            body.output_formats = ["zip"]
+        elif force_zip and "zip" not in body.output_formats:
             body.output_formats.append("zip")
         return body, uploads, skipped
     except StarletteHTTPException as exc:

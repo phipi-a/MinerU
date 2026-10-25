@@ -2304,7 +2304,7 @@ def test_api_server_zip_rejects_unsafe_image_sidecar_path(
     class _UnsafeResult:
         """模拟非标准解析结果，验证 ZIP writer 的下游路径防护仍生效。"""
 
-        def save(self, writer: Any, *, include_markdown_map: bool = False, pure_markdown: bool = False) -> None:
+        def save(self, writer: Any, *, files: Any = (), pure_markdown: bool = False) -> None:
             """尝试写出不安全 sidecar 路径。"""
             writer.write("../escape.png", b"bad-image")
 

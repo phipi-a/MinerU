@@ -165,7 +165,7 @@ Path("report.html").write_text(html, encoding="utf-8")
 
 ## 文件保存、ZIP 与素材
 
-`ParseResult.save(writer)` 先在文档副本上物化图片，再写出 `markdown.md`、`middle_json.json`、`structured_content.json` 和 `images/` 素材；有原始模型结果时还写出 `model_output.json`。自部署 V1 API ZIP 与 `mineru-kit parse --format zip` 共用这一保存入口。包内三种消费格式引用同一组素材，图片字节、源页号、块索引及旋转元数据保持不变。
+`ParseResult.save(writer)` 先在文档副本上物化图片，再写出 `markdown.md`、`middle_json.json`、`structured_content.json` 和 `images/` 素材；有原始模型结果时还写出 `model_output.json`。自部署 V1 API ZIP 与 `mineru-kit parse --format zip` 共用这一保存入口。`ParseResult.save(writer, files=...)` 只写出所选文件及其引用的图片；V1 API 请求同时指定 `zip` 和其他输出格式时，ZIP 仅打包这些格式，只请求 `zip` 时仍返回完整结果包。包内三种消费格式引用同一组素材，图片字节、源页号、块索引及旋转元数据保持不变。
 
 ```python
 from mineru.parser.writer import FileBasedDataWriter
