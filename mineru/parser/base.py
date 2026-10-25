@@ -72,6 +72,7 @@ class ParseResult:
         mode: RenderMode | None = None,
         asset_base_url: str = "",
         image_renderer: ImageRenderer | None = None,
+        pure_markdown: bool = False,
     ) -> str:
         if mode is None:
             mode = RenderMode.FULL if add_markers else RenderMode.DEFAULT
@@ -80,34 +81,44 @@ class ParseResult:
             mode=mode,
             asset_base_url=asset_base_url,
             image_renderer=image_renderer,
+            pure_markdown=pure_markdown,
         )
 
     def structured_content(self, *, asset_base_url: str = "") -> dict[str, Any]:
         return render_structured_content(self.middle_json, asset_base_url=asset_base_url)
 
-    def markdown_with_map(self) -> tuple[str, dict[str, Any]]:
-        """Return default Markdown and a standalone UTF-8 SHA-256/box source map."""
+    def markdown_with_map(self, *, pure_markdown: bool = False) -> tuple[str, dict[str, Any]]:
+        """Return the selected Markdown variant and its UTF-8 SHA-256/box source map."""
         from .markdown_map import render_markdown_map
         from .positioned import positioned_document
 
-        return render_markdown_map(self.middle_json, positioned_document(self.middle_json, self._model_output))
+        return render_markdown_map(
+            self.middle_json, positioned_document(self.middle_json, self._model_output), pure_markdown=pure_markdown
+        )
 
-    def markdown_map(self) -> dict[str, Any]:
+    def markdown_map(self, *, pure_markdown: bool = False) -> dict[str, Any]:
         """Return only the source map; offsets use Unicode codepoints, end exclusive."""
-        return self.markdown_with_map()[1]
+        return self.markdown_with_map(pure_markdown=pure_markdown)[1]
 
-    def save(self, writer: DataWriter) -> None:
-        """在副本上外置并校验素材，再保存可离线重渲染的协议及原始图片字节。"""
+    def save(self, writer: DataWriter, *, include_markdown_map: bool = False, pure_markdown: bool = False) -> None:
+        """Save local assets and optionally a source map paired with the exported Markdown."""
         from docvortex.export import materialize_middle, validate_materialized_assets
 
         middle_json, assets = materialize_middle(self.middle_json)
         validate_materialized_assets(middle_json, assets)
-        exported = ParseResult(middle_json=middle_json)
+        exported = ParseResult(middle_json=middle_json, _model_output=self._model_output)
+        markdown, source_map = (
+            exported.markdown_with_map(pure_markdown=pure_markdown)
+            if include_markdown_map
+            else (exported.markdown(pure_markdown=pure_markdown), None)
+        )
         text_files = {
-            "markdown.md": exported.markdown(),
+            "markdown.md": markdown,
             "middle_json.json": exported.to_json(),
             "structured_content.json": json.dumps(exported.structured_content(), ensure_ascii=False, indent=2),
         }
+        if source_map is not None:
+            text_files["markdown_map.json"] = json.dumps(source_map, ensure_ascii=False, indent=2)
 
         if self._model_output is not None:
             validate_mineru_metadata(self._model_output)

@@ -490,6 +490,7 @@ class CreateJobRequest(BaseModel):
         default="auto", description="OCR mode for this parse job: auto-detect, native text, or forced OCR."
     )
     output_formats: list[str] = ["markdown"]
+    pure_markdown: bool = False
     callback: CallbackConfig | None = None
 
 
@@ -1169,11 +1170,13 @@ class FileStore:
         app_state.file_store = self
 
 
-def _build_self_contained_zip_output(result: ParseResult) -> bytes:
+def _build_self_contained_zip_output(
+    result: ParseResult, *, include_markdown_map: bool = False, pure_markdown: bool = False
+) -> bytes:
     """构建自包含解析 zip，确保只请求 zip 时也能恢复 middle_json、图片和 model_output。"""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        result.save(_ZipDataWriter(zf))
+        result.save(_ZipDataWriter(zf), include_markdown_map=include_markdown_map, pure_markdown=pure_markdown)
     return buf.getvalue()
 
 
@@ -1774,7 +1777,7 @@ async def _run_job(
                 output_files = OutputFiles()
                 mapped_markdown = None
                 if "markdown_map" in out_formats:
-                    mapped_markdown, source_map = await run_sync(result.markdown_with_map)
+                    mapped_markdown, source_map = await run_sync(result.markdown_with_map, pure_markdown=req.pure_markdown)
                     content_bytes = _json_utf8_bytes(source_map)
                     sha = hashlib.sha256(content_bytes).hexdigest()
                     file_store.store_blob(content_bytes, sha256hex=sha)
@@ -1791,7 +1794,11 @@ async def _run_job(
                     if fmt not in out_formats:
                         continue
                     if fmt == "markdown":
-                        md = mapped_markdown if mapped_markdown is not None else await run_sync(result.markdown)
+                        md = (
+                            mapped_markdown
+                            if mapped_markdown is not None
+                            else await run_sync(result.markdown, pure_markdown=req.pure_markdown)
+                        )
                         content_bytes = _text_utf8_bytes(md or "")
                         sha = hashlib.sha256(content_bytes).hexdigest()
                         file_store.store_blob(content_bytes, sha256hex=sha)
@@ -1814,7 +1821,12 @@ async def _run_job(
 
                 # zip
                 if "zip" in out_formats:
-                    zip_bytes = await run_sync(_build_self_contained_zip_output, result)
+                    zip_bytes = await run_sync(
+                        _build_self_contained_zip_output,
+                        result,
+                        include_markdown_map="markdown_map" in out_formats,
+                        pure_markdown=req.pure_markdown,
+                    )
                     zip_sha = hashlib.sha256(zip_bytes).hexdigest()
                     file_store.store_blob(zip_bytes, sha256hex=zip_sha)
                     zip_fid = file_store.create_file_for_output(f"{fr.name}.zip", zip_bytes, sha256hex=zip_sha, job_id=rec.id)

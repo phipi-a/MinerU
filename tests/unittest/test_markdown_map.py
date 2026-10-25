@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
+import io
+import json
 import re
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -15,7 +20,7 @@ from typing import Any
 
 from mineru.parser import api_server
 from mineru.parser.base import ParseResult
-from mineru.types import MiddleJson
+from mineru.types import MiddleJson, ModelJson
 
 
 def make_result(content: list[dict[str, Any]]) -> ParseResult:
@@ -133,13 +138,60 @@ def test_boundary_rewrites_still_use_explicit_group_ranges() -> None:
     assert slices(markdown, mapping) == [markdown, markdown]
 
 
+@pytest.mark.parametrize("include_map", [False, True])
+@pytest.mark.parametrize("pure_markdown", [False, True])
+def test_saved_map_preserves_model_position_provenance(tmp_path: Path, include_map: bool, pure_markdown: bool) -> None:
+    from mineru.parser.writer import FileBasedDataWriter
+
+    result = make_result([{"type": "text", "content": "😀 café", "styles": ["underline"]}])
+    result._model_output = ModelJson(
+        pages=[],
+        page_index_map=[],
+        metadata=result.middle_json.metadata,
+        extensions={"mineru_position_sources": result.middle_json.extensions.pop("mineru_position_sources")},
+    )
+    result.save(FileBasedDataWriter(str(tmp_path)), include_markdown_map=include_map, pure_markdown=pure_markdown)
+    assert (tmp_path / "markdown_map.json").exists() is include_map
+    markdown_bytes = (tmp_path / "markdown.md").read_bytes()
+    assert markdown_bytes.decode() == ("😀 café" if pure_markdown else "<u>😀 café</u>")
+    if include_map:
+        mapping = json.loads((tmp_path / "markdown_map.json").read_bytes())
+        assert hashlib.sha256(markdown_bytes).hexdigest() == mapping["markdown_sha256"]
+        assert slices(markdown_bytes.decode("utf-8"), mapping) == (["😀", "café"] if pure_markdown else ["<u>😀", "café</u>"])
+        assert all(region["level"] == "word" for region in regions(mapping))
+
+
 @pytest.mark.parametrize("include_markdown", [False, True])
+@pytest.mark.parametrize("include_zip", [False, True])
+@pytest.mark.parametrize("pure_markdown", [False, True])
 def test_rest_map_is_a_separate_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     include_markdown: bool,
+    include_zip: bool,
+    pure_markdown: bool,
 ) -> None:
-    result = make_result([{"type": "text", "content": "😀 café"}])
+    result = make_result([{"type": "text", "content": "😀 café", "styles": ["underline"] if pure_markdown else []}])
+    payload = result.middle_json.to_dict(skip_defaults=False)
+    image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+    payload["pages"][0]["blocks"].insert(
+        0,
+        {
+            "type": "image",
+            "index": 0,
+            "bbox": [0.1, 0.3, 0.8, 0.5],
+            "content": [
+                {
+                    "type": "image_body",
+                    "index": 0,
+                    "content": "",
+                    "image_base64": f"data:image/png;base64,{image_base64}",
+                }
+            ],
+        },
+    )
+    result = ParseResult.from_dict(payload)
+    original = result.middle_json.to_dict(skip_defaults=False)
     calls = []
 
     async def fake_parse(path: str, **kwargs: Any) -> ParseResult:
@@ -157,7 +209,10 @@ def test_rest_map_is_a_separate_artifact(
             json={
                 "files": [{"source": {"type": "local", "path": str(source)}}],
                 "tier": "flash",
-                "output_formats": ["markdown_map", "markdown"] if include_markdown else ["markdown_map"],
+                "pure_markdown": pure_markdown,
+                "output_formats": (
+                    ["markdown_map"] + (["markdown"] if include_markdown else []) + (["zip"] if include_zip else [])
+                ),
             },
         )
         assert response.status_code == 202, response.text
@@ -171,7 +226,7 @@ def test_rest_map_is_a_separate_artifact(
         outputs = job["files"][0]["output_files"]
         ref = outputs["markdown_map"]
         mapping = client.get(f"/v1/files/{ref['file_id']}/content").json()
-        assert mapping == result.markdown_map()
+        assert mapping == result.markdown_map(pure_markdown=pure_markdown)
         assert not outputs.get("middle_json")
         assert calls[0]["positions"] is True
         stored_map = app.state.file_store.get_file(ref["file_id"])
@@ -181,6 +236,103 @@ def test_rest_map_is_a_separate_artifact(
             ref = outputs["markdown"]
             markdown_bytes = client.get(f"/v1/files/{ref['file_id']}/content").content
             assert hashlib.sha256(markdown_bytes).hexdigest() == mapping["markdown_sha256"]
+        if include_zip:
+            ref = outputs["zip"]
+            archive_bytes = client.get(f"/v1/files/{ref['file_id']}/content").content
+            with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+                markdown_bytes = archive.read("markdown.md")
+                bundled_map = json.loads(archive.read("markdown_map.json"))
+                images = [name for name in archive.namelist() if name.startswith("images/")]
+                assert len(images) == 1
+                assert archive.read(images[0]) == base64.b64decode(image_base64)
+                markdown = markdown_bytes.decode("utf-8")
+                assert f"]({images[0]})" in markdown
+                assert "data:image" not in markdown
+                assert hashlib.sha256(markdown_bytes).hexdigest() == bundled_map["markdown_sha256"]
+                assert bundled_map["markdown_sha256"] != mapping["markdown_sha256"]
+                assert slices(markdown, bundled_map)[-2:] == ["😀", "café"]
+                if pure_markdown:
+                    assert not re.search(r"</?[A-Za-z]", markdown)
+        assert result.middle_json.to_dict(skip_defaults=False) == original
+
+
+def test_pure_map_translates_inline_markup_and_unicode() -> None:
+    result = make_result(
+        [
+            {"type": "text", "content": "😀A"},
+            {"type": "text", "content": "1", "styles": ["superscript"]},
+            {"type": "text", "content": " "},
+            {"type": "text", "content": "café", "styles": ["underline", "bold"]},
+        ]
+    )
+    before = result.middle_json.to_dict(skip_defaults=False)
+    markdown, mapping = result.markdown_with_map(pure_markdown=True)
+    assert markdown == result.markdown(pure_markdown=True)
+    assert markdown == "😀A1 **café**"
+    assert slices(markdown, mapping) == ["😀A1", "**café**"]
+    assert mapping["markdown_sha256"] == hashlib.sha256(markdown.encode()).hexdigest()
+    assert result.middle_json.to_dict(skip_defaults=False) == before
+
+
+def test_pure_map_flattens_complex_table_conservatively() -> None:
+    result = make_result([{"type": "text", "content": "After table"}])
+    payload = result.middle_json.to_dict(skip_defaults=False)
+    payload["pages"][0]["blocks"].insert(
+        0,
+        {
+            "type": "table",
+            "index": 0,
+            "bbox": [0.1, 0.3, 0.8, 0.5],
+            "content": [
+                {
+                    "type": "table_body",
+                    "index": 0,
+                    "content": ('<table><tr><th colspan="2">Title</th></tr><tr><td>A</td><td>B</td></tr></table>'),
+                }
+            ],
+        },
+    )
+    result = ParseResult.from_dict(payload)
+    markdown, mapping = result.markdown_with_map(pure_markdown=True)
+    assert markdown == result.markdown(pure_markdown=True)
+    assert "<table" not in markdown
+    assert "| Title |" in markdown
+    block = mapping["pages"][0]["blocks"][0]
+    assert block["level"] == "block"
+    assert block["lines"] == block["elements"] == []
+    assert "| Title |" in markdown[block["markdown_char_start"] : block["markdown_char_end"]]
+    assert slices(markdown, mapping)[-2:] == ["After", "table"]
+
+
+@pytest.mark.parametrize("output_format", ["markdown", "zip"])
+def test_pure_markdown_job_without_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output_format: str) -> None:
+    result = make_result([{"type": "text", "content": "Plain café", "styles": ["underline"]}])
+
+    async def parse(path: str, **kwargs: Any) -> ParseResult:
+        assert "positions" not in kwargs
+        return result
+
+    monkeypatch.setattr(api_server, "parse_async", parse)
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.7\n")
+    request = api_server.CreateJobRequest(
+        files=[{"source": {"type": "local", "path": str(source)}}],
+        tier="flash",
+        output_formats=[output_format],
+        pure_markdown=True,
+    )
+    file_store = api_server.FileStore(tmp_path / "store")
+    record = api_server.JobStore().create(request, file_store)
+    asyncio.run(api_server._run_job(record, request, file_store, image_analysis=False, allow_local_source=True))
+    assert record.status == "completed"
+    outputs = record.files[0].output_files
+    assert outputs.markdown_map is None
+    if output_format == "markdown":
+        assert file_store.read_file_data(outputs.markdown.file_id).decode() == "Plain café"
+    else:
+        with zipfile.ZipFile(io.BytesIO(file_store.read_file_data(outputs.zip.file_id))) as archive:
+            assert archive.read("markdown.md").decode() == "Plain café"
+            assert "markdown_map.json" not in archive.namelist()
 
 
 def test_flat_reference_list_preserves_leaf_word_ranges() -> None:

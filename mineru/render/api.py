@@ -154,6 +154,7 @@ def render(
             mode=resolved_options.mode,
             asset_base_url=resolved_options.asset_base_url,
             image_renderer=resolved_options.image_renderer,
+            pure_markdown=resolved_options.pure_markdown,
         )
 
     if output_format is RenderFormat.HTML:

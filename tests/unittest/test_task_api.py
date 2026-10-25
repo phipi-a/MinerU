@@ -155,6 +155,60 @@ def test_sync_defaults_and_zip_wrap_the_same_job(service: tuple[TestClient, Fast
     assert missing.status_code == 400
 
 
+@pytest.mark.parametrize("source_type", ["multipart", "raw", "inline"])
+def test_pure_markdown_tasks_include_paired_map_in_zip(
+    service: tuple[TestClient, FastAPI], source_type: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserve the selected Markdown variant through direct and routed task uploads."""
+    from test_markdown_map import make_result
+
+    client, _ = service
+    result = make_result([{"type": "text", "content": "Offline café", "styles": ["underline"]}])
+
+    async def parse(path: str, **kwargs: Any) -> Any:
+        return result
+
+    monkeypatch.setattr(api_server, "parse_async", parse)
+    formats = ["markdown", "markdown_map", "zip"]
+    if source_type == "inline":
+        import base64
+
+        response = client.post(
+            "/v1/tasks",
+            json={
+                "files": [{"source": {"type": "inline", "name": "source.html", "data": base64.b64encode(HTML).decode()}}],
+                "tier": "flash",
+                "pure_markdown": True,
+                "output_formats": formats,
+            },
+        )
+    else:
+        params = [("tier", "flash"), ("pure_markdown", "true"), *(("output_formats", fmt) for fmt in formats)]
+        if source_type == "raw":
+            response = client.post(
+                "/v1/tasks",
+                params=[*params, ("filename", "source.html")],
+                content=HTML,
+                headers={"content-type": "application/octet-stream"},
+            )
+        else:
+            response = client.post("/v1/tasks", params=params, files={"files": ("source.html", HTML, "text/html")})
+    assert response.status_code == 202, response.text
+    task_id = response.json()["task_id"]
+    task = _terminal(client, task_id)
+    assert task["status"] == "completed", task
+    content = task["files"][0]["content"]
+    assert content["markdown"] == "Offline café"
+    assert content["markdown_map"]["markdown_sha256"] == hashlib.sha256(content["markdown"].encode()).hexdigest()
+    response = client.get(f"/v1/tasks/{task_id}/result?response_format=zip")
+    assert response.status_code == 200, response.text
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        markdown = archive.read("markdown.md")
+        mapping = json.loads(archive.read("markdown_map.json"))
+    assert mapping["markdown_sha256"] == hashlib.sha256(markdown).hexdigest()
+    assert markdown.decode() == content["markdown"]
+
+
 def test_file_id_reuse_and_source_download_boundary(service: tuple[TestClient, FastAPI]) -> None:
     """新入口的源文件可被 V1 和便捷入口复用，仍不能公开下载。"""
     client, _ = service

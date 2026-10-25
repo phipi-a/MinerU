@@ -112,6 +112,7 @@ class UploadTaskOptions(BaseModel):
     ocr_mode: Literal["auto", "txt", "ocr"] = "auto"
     page_range: str = ""
     output_formats: list[str] = Field(default_factory=lambda: ["markdown"])
+    pure_markdown: bool = False
     filename: str | None = Field(default=None, min_length=1)
     sha256sum: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
@@ -185,7 +186,8 @@ async def _prepare_submission(
             options = UploadTaskOptions.model_validate(params)
             options.page_range = normalize_page_range_input(options.page_range)
             if not options.output_formats or any(
-                fmt not in {"markdown", "middle_json", "structured_content", "zip"} for fmt in options.output_formats
+                fmt not in {"markdown", "markdown_map", "middle_json", "structured_content", "zip"}
+                for fmt in options.output_formats
             ):
                 _invalid("Unsupported output format", code="unsupported_output_format", param="output_formats")
             if media_type == "application/octet-stream":
@@ -238,12 +240,15 @@ async def _prepare_submission(
                 tier=options.tier,
                 ocr_mode=options.ocr_mode,
                 output_formats=options.output_formats,
+                pure_markdown=options.pure_markdown,
             )
         for entry in body.files:
             entry.page_range = normalize_page_range_input(entry.page_range) or None
         if body.callback is not None:
             _invalid("Webhook callbacks are not supported by this service", param="callback")
-        if any(fmt not in {"markdown", "middle_json", "structured_content", "zip"} for fmt in body.output_formats):
+        if any(
+            fmt not in {"markdown", "markdown_map", "middle_json", "structured_content", "zip"} for fmt in body.output_formats
+        ):
             _invalid("Unsupported output format", code="unsupported_output_format", param="output_formats")
         if force_zip and "zip" not in body.output_formats:
             body.output_formats.append("zip")
@@ -295,10 +300,12 @@ async def build_task_result(job: dict[str, Any], backend: TaskBackend, response_
         if file.get("status") != "completed":
             continue
         for fmt in job.get("output_formats", []):
-            if fmt in {"markdown", "middle_json", "structured_content"} and not (file.get("output_files") or {}).get(fmt):
+            if fmt in {"markdown", "markdown_map", "middle_json", "structured_content"} and not (
+                file.get("output_files") or {}
+            ).get(fmt):
                 _invalid(f"{fmt} output is missing", status_code=502, code="invalid_response")
         for fmt, ref in (file.get("output_files") or {}).items():
-            if ref and fmt in {"markdown", "middle_json", "structured_content"}:
+            if ref and fmt in {"markdown", "markdown_map", "middle_json", "structured_content"}:
                 data = await backend.read_output(ref["file_id"])
                 file["content"][fmt] = data.decode("utf-8") if fmt == "markdown" else json.loads(data)
     return JSONResponse(payload)

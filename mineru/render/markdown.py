@@ -13,18 +13,24 @@ def render_markdown(
     mode: RenderMode = RenderMode.DEFAULT,
     asset_base_url: str = "",
     image_renderer: ImageRenderer | None = None,
+    pure_markdown: bool = False,
 ) -> str:
     """惰性加载 Markdown 实现并渲染严格 MiddleJson。"""
     from ..config import config
     from docvortex.render.markdown import render_markdown as _render_markdown
 
-    return _render_markdown(
+    markdown = _render_markdown(
         middle_json,
         mode=mode,
         asset_base_url=asset_base_url,
         image_renderer=image_renderer,
         latex_delimiters=config.render.latex_delimiters,
     )
+    if pure_markdown:
+        from docvortex.render.pure_markdown import convert_to_pure_markdown
+
+        return convert_to_pure_markdown(markdown).markdown
+    return markdown
 
 
 __all__ = ["render_markdown"]

@@ -14,6 +14,54 @@ The map is registered as a job output and follows the same retention policy as
 Markdown and other artifacts. Its retention period starts after job cleanup;
 download the paired files before they expire.
 
+For an offline download with local images, request both formats:
+
+```json
+{"output_formats": ["zip", "markdown_map"]}
+```
+
+Download `output_files.zip` and extract it. The archive contains `markdown.md`,
+`markdown_map.json`, and local image assets under `images/`, alongside the usual
+structured result files. The bundled map is generated after images are
+materialized, so its hash and offsets match the exact `markdown.md` inside the
+archive. Keep the extracted directory structure to preserve relative image links.
+The separately returned `output_files.markdown_map` still maps the standalone
+Markdown output; image paths can differ, so use the map bundled with the ZIP for
+the bundled Markdown. Requesting only `zip` does not add a map.
+
+To select HTML-free Markdown for both standalone outputs and the ZIP, add the
+`pure_markdown` option to the job request:
+
+```json
+{
+  "files": [{"source": {"type": "file_id", "file_id": "file_example"}}],
+  "output_formats": ["markdown", "markdown_map", "zip"],
+  "pure_markdown": true
+}
+```
+
+Download `output_files.zip` through `/v1/files/{file_id}/content`. Its
+`markdown.md`, `markdown_map.json`, and local `images/` paths form an offline
+bundle. The option also works on `/v1/tasks` and `/v1/file_parse`; multipart/raw
+uploads accept `pure_markdown=true` as a query parameter and repeated
+`output_formats=zip&output_formats=markdown_map` parameters.
+
+The HTML-free variant uses GFM tables and strikethrough. Unsupported visual
+styles become plain text, collapsible sections are expanded, and complex tables
+lose merged cell spans. Code and formula literals retain their contents, including
+literal angle brackets. Custom HTML anchor targets are removed. The document's
+semantic representation and other output formats are unchanged. Remote image
+URLs are not downloaded automatically.
+
+The map is translated through DocVortex's explicit edit trace and hashed against
+the final Markdown bytes. Table/code structure replacements use conservative
+block ranges instead of retaining unsupported fine-grained positions. The default
+`pure_markdown=false` preserves the existing HTML-enhanced Markdown behavior.
+
+The pinned DocVortex dependency includes the shared
+`docvortex.render.pure_markdown` API. For development against a local checkout,
+install it with `uv pip install --python .venv/bin/python --no-deps -e ../DocVortex`.
+
 ```json
 {
   "version": 2,
@@ -159,6 +207,14 @@ result = parser.parse(path, positions=True)
 markdown, source_map = result.markdown_with_map()
 # Or, when only the separate dictionary is wanted:
 source_map = result.markdown_map()
+
+# Save Markdown, local images, and their paired map to a directory:
+from mineru.parser.writer import FileBasedDataWriter
+result.save(FileBasedDataWriter("output"), include_markdown_map=True)
+
+# Select the HTML-free variant, including the paired map:
+markdown, source_map = result.markdown_with_map(pure_markdown=True)
+result.save(FileBasedDataWriter("output"), include_markdown_map=True, pure_markdown=True)
 ```
 
 Without `positions=True`, existing block boxes remain available but no word

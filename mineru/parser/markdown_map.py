@@ -353,7 +353,9 @@ def _continuation_ranges(
     return mapped
 
 
-def render_markdown_map(middle: MiddleJson, positioned: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def render_markdown_map(
+    middle: MiddleJson, positioned: dict[str, Any], *, pure_markdown: bool = False
+) -> tuple[str, dict[str, Any]]:
     """Return unchanged default Markdown and its standalone box/range map.
 
     Continuations lacking a public ownership trace use an explicitly marked group
@@ -418,7 +420,7 @@ def render_markdown_map(middle: MiddleJson, positioned: dict[str, Any]) -> tuple
     assert cursor == len(markdown)
     _hierarchy(pages, middle, entries)
     _caption_children(pages, middle, entries, markdown)
-    return markdown, {
+    mapping = {
         "version": 2,
         "markdown_sha256": hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
         "offset_units": "unicode_codepoints",
@@ -426,6 +428,37 @@ def render_markdown_map(middle: MiddleJson, positioned: dict[str, Any]) -> tuple
         "bbox_units": "normalized",
         "pages": pages,
     }
+    if pure_markdown:
+        return _convert_pure_map(markdown, mapping)
+    return markdown, mapping
+
+
+def _convert_pure_map(markdown: str, mapping: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Translate verified ranges through the shared renderer's explicit edit trace."""
+    from docvortex.render.pure_markdown import convert_to_pure_markdown
+
+    converted = convert_to_pure_markdown(markdown)
+
+    def translate(item: dict[str, Any]) -> bool:
+        start, end = item["markdown_char_start"], item["markdown_char_end"]
+        coarse = converted.coarsens_range(start, end)
+        item["markdown_char_start"], item["markdown_char_end"] = converted.translate_range(start, end)
+        if "token_id" in item:
+            prefix = item["token_id"].rsplit("/tokens/", 1)[0]
+            item["token_id"] = f"{prefix}/tokens/{item['markdown_char_start']}:{item['markdown_char_end']}"
+        if coarse:
+            item["level"] = "group" if item.get("level") == "group" else "block" if item.get("bbox") else "unavailable"
+            item["lines"] = []
+            item["elements"] = []
+        for key in ("lines", "elements", "children"):
+            if key in item:
+                item[key] = [child for child in item[key] if translate(child)]
+        return item["markdown_char_start"] < item["markdown_char_end"]
+
+    for page in mapping["pages"]:
+        page["blocks"] = [block for block in page["blocks"] if translate(block)]
+    mapping["markdown_sha256"] = hashlib.sha256(converted.markdown.encode("utf-8")).hexdigest()
+    return converted.markdown, mapping
 
 
 def _hierarchy(pages: list[dict[str, Any]], middle: MiddleJson, entries: dict[str, Any]) -> None:

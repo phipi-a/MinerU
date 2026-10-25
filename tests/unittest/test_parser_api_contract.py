@@ -2289,6 +2289,7 @@ def test_api_server_zip_includes_model_output_when_parse_result_has_it(
     assert zip_ref is not None
     with zipfile.ZipFile(io.BytesIO(file_store.read_file_data(zip_ref.file_id))) as archive:
         assert "model_output.json" in archive.namelist()
+        assert "markdown_map.json" not in archive.namelist()
         model_output_text = archive.read("model_output.json").decode("utf-8")
         payload = json.loads(model_output_text)
     assert payload == ModelJson.from_dict({**_model_payload(), "pages": [model_output]}).to_dict(skip_defaults=False)
@@ -2303,7 +2304,7 @@ def test_api_server_zip_rejects_unsafe_image_sidecar_path(
     class _UnsafeResult:
         """模拟非标准解析结果，验证 ZIP writer 的下游路径防护仍生效。"""
 
-        def save(self, writer: Any) -> None:
+        def save(self, writer: Any, *, include_markdown_map: bool = False, pure_markdown: bool = False) -> None:
             """尝试写出不安全 sidecar 路径。"""
             writer.write("../escape.png", b"bad-image")
 
