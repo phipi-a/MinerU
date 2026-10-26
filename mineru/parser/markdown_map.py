@@ -11,7 +11,7 @@ import re
 from copy import deepcopy
 from typing import Any
 
-from docvortex.render.fragments import render_inline_content
+from docvortex.render.fragments import InlineEmission, render_inline_content, trace_inline_content
 from docvortex.render.markdown import render_single_block
 
 from ..config import config
@@ -63,44 +63,17 @@ def _template(rendered: str) -> tuple[str, str] | None:
     return prefix, suffix
 
 
-def _text_boundaries(span: TextSpan, cuts: set[int], *, pure: bool) -> tuple[str, dict[int, int], dict[int, int]] | None:
-    """Locate owned character boundaries through exact compositional render checks."""
-    delimiters = config.render.latex_delimiters
-
-    def emit(spans: list[Any]) -> str:
-        return render_inline_content(spans, delimiters, pure_markdown=pure)
-
-    rendered = emit([span])
-    plain = span.model_copy(update={"styles": []})
-    raw = emit([plain])
-    template = _template(emit([span.model_copy(update={"content": _PROBE})]))
-    if template is None:
-        return None
-    opening, closing = template
-    if rendered == raw:
-        opening = closing = ""
-    leading = 0 if not opening else len(span.content) - len(span.content.lstrip(" \t"))
-    core_end = len(span.content) if not opening else len(span.content.rstrip(" \t"))
-    prefix = emit([plain.model_copy(update={"content": span.content[:leading]})])
-    core = emit([plain.model_copy(update={"content": span.content[leading:core_end]})])
-    suffix = emit([plain.model_copy(update={"content": span.content[core_end:]})])
-    if prefix + core + suffix != raw or prefix + opening + core + closing + suffix != rendered:
-        return None  # whitespace rewriting, context-sensitive escaping, or unsupported styles
-    starts: dict[int, int] = {}
-    ends: dict[int, int] = {}
-    for cut in cuts | {0, len(span.content)}:
-        left = emit([plain.model_copy(update={"content": span.content[:cut]})])
-        right = emit([plain.model_copy(update={"content": span.content[cut:]})])
-        if left + right != raw:
-            return None  # no guess about an escape that crosses this source boundary
-        position = len(left)
-        if cut > leading:
-            position += len(opening)
-        if cut > core_end:
-            position += len(closing)
-        starts[cut] = position
-        ends[cut] = position + (len(closing) if cut == core_end else 0)
-    return rendered, starts, ends
+def _absorb_wrappers(emissions: tuple[InlineEmission, ...], position: int, path: tuple[int, ...], *, backward: bool) -> int:
+    """Extend a boundary over the adjacent wrapper emissions of the span at path."""
+    ordered = reversed(emissions) if backward else iter(emissions)
+    for emission in ordered:
+        edge = emission.end if backward else emission.start
+        if edge != position:
+            continue
+        if emission.source_start is not None or emission.path[: len(path)] != path:
+            break
+        position = emission.start if backward else emission.end
+    return position
 
 
 def _fine_ranges(
@@ -112,14 +85,28 @@ def _fine_ranges(
     inline_only: bool = False,
 ) -> list[dict[str, Any]] | None:
     content = block.content
-    if (
-        not isinstance(content, list)
-        or not content
-        or any(getattr(span, "type", None) not in {"text", "equation_inline"} for span in content)
-    ):
+    if not isinstance(content, list) or not content:
+        return None
+    # Hyperlink labels are part of the visible stream; their syntax is a wrapper.
+    leaves: list[tuple[tuple[int, ...], Any]] = []
+    for index, span in enumerate(content):
+        if getattr(span, "type", None) == "hyperlink":
+            leaves.extend(((index, child), leaf) for child, leaf in enumerate(span.content))
+        else:
+            leaves.append(((index,), span))
+    if any(getattr(span, "type", None) not in {"text", "equation_inline"} for _, span in leaves):
         return None
     delimiters = config.render.latex_delimiters
-    logical = "".join(span.content if span.type == "text" else f"\\({span.content}\\)" for span in content)
+    # Each logical character is owned by a leaf; formula delimiters (offset None) by the formula.
+    logical = ""
+    owners: list[tuple[tuple[int, ...], int | None]] = []
+    for path, span in leaves:
+        if span.type == "text":
+            logical += span.content
+            owners.extend((path, offset) for offset in range(len(span.content)))
+        else:
+            logical += f"\\({span.content}\\)"
+            owners.extend([(path, None)] * 2 + [(path, offset) for offset in range(len(span.content))] + [(path, None)] * 2)
     # Walk the producer's ordered stream at its current cursor, never search for
     # the next occurrence. A changed stream makes the entire refinement fail.
     cursor = 0
@@ -147,37 +134,33 @@ def _fine_ranges(
     if template is None:
         return None
     opening, closing = template
-    inline = render_inline_content(content, delimiters, pure_markdown=pure)
-    if opening + inline + closing != rendered:
+    traced = trace_inline_content(content, delimiters, pure_markdown=pure)
+    if opening + traced.markdown + closing != rendered:
         return None
+    # The token holding a span's first (last) visible character also owns the span's
+    # opening (closing) wrappers: styles, formula delimiters, link syntax.
+    edges: dict[tuple[int, ...], list[int]] = {}
+    for offset, (path, _) in enumerate(owners):
+        if not logical[offset].isspace():
+            for depth in range(1, len(path) + 1):
+                edges.setdefault(path[:depth], [offset, offset])[1] = offset
     starts: dict[int, int] = {}
     ends: dict[int, int] = {}
-    logical_cursor = 0
-    emitted_cursor = len(opening)
-    cuts = {position for start, end, _ in intervals for position in (start, end)}
-    pieces = []
-    for span in content:
-        length = len(span.content) if span.type == "text" else len(f"\\({span.content}\\)")
-        local_cuts = {cut - logical_cursor for cut in cuts if logical_cursor <= cut <= logical_cursor + length}
-        if span.type == "text":
-            traced = _text_boundaries(span, local_cuts, pure=pure)
-            if traced is None:
+    for start, end, _ in intervals:
+        bounds = []
+        for path, offset in (owners[start], owners[end - 1]):
+            located = traced.span_range(path) if offset is None else traced.source_range(path, offset, offset + 1)
+            if located is None:
                 return None
-            piece, local_starts, local_ends = traced
-        else:
-            piece = render_inline_content([span], delimiters, pure_markdown=pure)
-            if local_cuts - {0, length}:
-                return None  # formulas are atomic
-            local_starts = local_ends = {0: 0, length: len(piece)}
-        for cut, offset in local_starts.items():
-            starts[logical_cursor + cut] = emitted_cursor + offset
-        for cut, offset in local_ends.items():
-            ends.setdefault(logical_cursor + cut, emitted_cursor + offset)
-        pieces.append(piece)
-        logical_cursor += length
-        emitted_cursor += len(piece)
-    if "".join(pieces) != inline:
-        return None
+            bounds.append(located)
+        first, last = bounds[0][0], bounds[1][1]
+        for path, (left, right) in edges.items():
+            if start <= left < end:
+                first = min(first, _absorb_wrappers(traced.emissions, first, path, backward=True))
+            if start <= right < end:
+                last = max(last, _absorb_wrappers(traced.emissions, last, path, backward=False))
+        starts[start] = len(opening) + first
+        ends[end] = len(opening) + last
     ranges = []
     for start, end, token in intervals:
         if token.get("bbox") is None:

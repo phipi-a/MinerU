@@ -23,8 +23,14 @@ from mineru.parser.base import DEFAULT_RESULT_FILES, ParseResult
 from mineru.types import MiddleJson, ModelJson
 
 
+def visible_text(span: dict[str, Any]) -> str:
+    if span["type"] == "hyperlink":
+        return "".join(visible_text(child) for child in span["content"])
+    return span["content"] if span["type"] == "text" else f"\\({span['content']}\\)"
+
+
 def make_result(content: list[dict[str, Any]]) -> ParseResult:
-    text = "".join(s["content"] if s["type"] == "text" else f"\\({s['content']}\\)" for s in content)
+    text = "".join(visible_text(s) for s in content)
     box = [0.1, 0.1, 0.8, 0.2]
     block = {"type": "text", "index": 1, "bbox": box, "content": content}
     tokens = [
@@ -99,6 +105,27 @@ def test_style_wrappers_at_span_edges_and_spaces() -> None:
     markdown, mapping = make_result([{"type": "text", "content": " alpha beta ", "styles": ["bold"]}]).markdown_with_map()
     assert markdown == " **alpha beta** "
     assert slices(markdown, mapping) == ["**alpha", "beta**"]
+
+
+@pytest.mark.parametrize("pure_markdown", [False, True])
+def test_link_keeps_word_ranges_and_edge_words_own_link_syntax(pure_markdown: bool) -> None:
+    url = "https://github.com/microsoft/LoRA"
+    result = make_result(
+        [
+            {"type": "text", "content": "GPT-2 at "},
+            {"type": "hyperlink", "url": url, "content": [{"type": "text", "content": url}]},
+            {"type": "text", "content": ". See "},
+            {
+                "type": "hyperlink",
+                "url": "https://e.x",
+                "content": [{"type": "text", "content": "the *repo*", "styles": ["bold"]}],
+            },
+        ]
+    )
+    markdown, mapping = result.markdown_with_map(pure_markdown=pure_markdown)
+    assert markdown == f"GPT-2 at [{url}]({url}). See [**the \\*repo\\***](https://e.x)"
+    assert slices(markdown, mapping) == ["GPT-2", "at", f"[{url}]({url}).", "See", "[**the", "\\*repo\\***](https://e.x)"]
+    assert all(region["level"] == "word" for region in regions(mapping))
 
 
 def test_formula_is_atomic_and_has_its_real_delimiters() -> None:
