@@ -1,0 +1,8 @@
+services:
+  api:
+    environment:
+      MINERU_DEVICE_MODE: cuda
+      CUDA_VISIBLE_DEVICES: "0"
+      NVIDIA_VISIBLE_DEVICES: all
+    devices:
+      - "nvidia.com/gpu=${NVIDIA_GPU_ID:-0}"

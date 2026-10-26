@@ -1,0 +1,19 @@
+# Only application source and the launcher belong in the build context.
+**
+!pyproject.toml
+!README.md
+!LICENSE.md
+!mineru/
+!mineru/**
+!docker/
+docker/**
+!docker/rest-api/
+docker/rest-api/**
+!docker/rest-api/entrypoint.py
+**/.env
+**/.env.*
+**/__pycache__/
+**/*.pyc
+**/AGENTS.md
+**/CLAUDE.md
+**/GEMINI.md

@@ -1,0 +1,33 @@
+# CPU configuration. Add compose.gpu.yaml to enable NVIDIA GPU execution.
+services:
+  api:
+    image: mineru-fork-api:local
+    build:
+      context: ../..
+      dockerfile: docker/rest-api/Dockerfile
+      args:
+        BASE_IMAGE: ${MINERU_BASE_IMAGE:-vllm/vllm-openai:v0.21.0}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${MINERU_BIND_ADDRESS:-127.0.0.1}:${MINERU_PORT:-8000}:8000"
+    environment:
+      MINERU_DEVICE_MODE: cpu
+      CUDA_VISIBLE_DEVICES: ""
+      NVIDIA_VISIBLE_DEVICES: void
+      MINERU_SERVER_TIER: ${MINERU_SERVER_TIER:-standard}
+      MINERU_SERVER_CONCURRENCY: ${MINERU_SERVER_CONCURRENCY:-1}
+      MINERU_SERVER_PRELOAD: ${MINERU_SERVER_PRELOAD:-0}
+      MINERU_SERVER_IMAGE_ANALYSIS: ${MINERU_SERVER_IMAGE_ANALYSIS:-0}
+      MINERU_API_RETENTION_SECONDS: ${MINERU_API_RETENTION_SECONDS:-86400}
+      MINERU_API_KEY: ${MINERU_API_KEY:-}
+      MINERU_MODEL_SOURCE: ${MINERU_MODEL_SOURCE:-huggingface}
+      MINERU_CPU_NUM_THREADS: ${MINERU_CPU_NUM_THREADS:-8}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - data:/data
+    shm_size: "4gb"
+    stop_grace_period: 2m
+
+volumes:
+  data:
