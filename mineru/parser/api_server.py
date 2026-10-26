@@ -489,10 +489,11 @@ class CreateJobRequest(BaseModel):
     files: list[JobFileEntry] = Field(min_length=1, max_length=_MAX_FILES_PER_JOB_DEFAULT)
     tier: Tier | None = None
     ocr_mode: Literal["auto", "txt", "ocr", "all"] = Field(
-        default="auto",
+        default="all",
         description=(
             "auto: classify; txt: native text; ocr: force recognition; "
-            "all: compare PDF/VLM text per block (standard/advanced)."
+            "all: compare PDF/VLM text per block (standard/advanced, default for PDF/images). "
+            "When omitted, Flash/basic and native documents use auto."
         ),
     )
     output_formats: list[str] = ["markdown"]
@@ -1774,7 +1775,9 @@ async def _run_job(
                 result = await parse_async(
                     str(tmp_path),
                     tier=effective_tier,
-                    ocr_mode=req.ocr_mode,
+                    ocr_mode=(
+                        "auto" if "ocr_mode" not in req.model_fields_set and effective_tier == "flash" else req.ocr_mode
+                    ),
                     image_analysis=image_analysis,
                     page_range=page_range,
                     source_context=source_context,
@@ -2250,6 +2253,8 @@ async def submit_parse_job(
             )
     else:
         body.tier = body.tier or default_tier
+    if "ocr_mode" not in body.model_fields_set and (body.tier not in {"standard", "advanced"} or can_default_to_flash):
+        body.ocr_mode = "auto"
     if body.ocr_mode == "all" and (body.tier not in {"standard", "advanced"} or can_default_to_flash):
         _raise_api_error(
             400,

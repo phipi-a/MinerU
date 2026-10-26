@@ -259,6 +259,11 @@ markdown, mapping = result.markdown_with_map()
 ```
 
 The REST Jobs API and upload task options accept the same `ocr_mode` value.
+When `ocr_mode` is omitted, the REST API defaults to `all` for PDF/image input
+at Standard or Advanced. Flash, Basic, and native document inputs default to
+`auto`; explicit modes always take precedence. Mixed PDF/native batches resolve
+the omitted mode per file. The Python SDK and parse CLI retain their explicit
+`auto` defaults.
 The CLI accepts `mineru-kit parse book.pdf --tier advanced --ocr-mode all`.
 Flash/basic tiers and non-PDF native inputs do not support this comparison mode.
 

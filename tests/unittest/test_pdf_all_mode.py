@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -199,3 +201,84 @@ def test_api_rejects_all_on_flash_before_creating_jobs(tmp_path: Path) -> None:
     assert response.status_code == 400
     assert response.json()["error"]["param"] == "ocr_mode"
     assert app.state.job_store._jobs == {}
+
+
+@pytest.mark.parametrize("route", ["jobs", "tasks", "file_parse"])
+@pytest.mark.parametrize(
+    ("tier", "explicit_mode", "expected"),
+    [
+        ("standard", None, "all"),
+        ("advanced", None, "all"),
+        ("basic", None, "auto"),
+        ("flash", None, "auto"),
+        ("standard", "auto", "auto"),
+        ("standard", "txt", "txt"),
+    ],
+)
+def test_api_resolves_omitted_mode_for_jobs_and_uploads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str, tier: str, explicit_mode: str | None, expected: str
+) -> None:
+    from test_markdown_map import make_result
+    from mineru.parser import api_server
+
+    seen = []
+
+    async def parse(_path: str, **options: Any) -> ParseResult:
+        seen.append(options["ocr_mode"])
+        return make_result([{"type": "text", "content": "Verified default."}])
+
+    monkeypatch.setattr(api_server, "ensure_tier_runtime_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_server, "parse_async", parse)
+    app = create_app(upload_dir=str(tmp_path), tier="standard")
+    with TestClient(app) as client:
+        if route == "jobs":
+            payload = {
+                "files": [
+                    {"source": {"type": "inline", "name": "default.pdf", "data": base64.b64encode(b"%PDF-test").decode()}}
+                ],
+                "tier": tier,
+            }
+            if explicit_mode is not None:
+                payload["ocr_mode"] = explicit_mode
+            response = client.post("/v1/parse/jobs", json=payload)
+            assert response.status_code == 202, response.text
+            job_id = response.json()["job_id"]
+        else:
+            params = {"tier": tier, "filename": "default.pdf"}
+            if explicit_mode is not None:
+                params["ocr_mode"] = explicit_mode
+            response = client.post(
+                f"/v1/{route}", params=params, content=b"%PDF-test", headers={"Content-Type": "application/octet-stream"}
+            )
+            assert response.status_code in {200, 202}, response.text
+            job_id = response.json()["task_id"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            job = client.get(f"/v1/parse/jobs/{job_id}").json()
+            if job["status"] in {"completed", "failed", "partial"}:
+                break
+            time.sleep(0.01)
+        assert job["status"] == "completed", job
+    assert seen == [expected]
+
+
+def test_mixed_pdf_and_native_inputs_resolve_defaults_per_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from test_markdown_map import make_result
+    from mineru.parser import api_server
+
+    seen = {}
+
+    async def parse(path: str, **options: Any) -> ParseResult:
+        seen[Path(path).suffix] = options["ocr_mode"]
+        return make_result([{"type": "text", "content": "Mixed inputs."}])
+
+    monkeypatch.setattr(api_server, "ensure_tier_runtime_dependencies", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(api_server, "parse_async", parse)
+    app = create_app(upload_dir=str(tmp_path), tier="standard")
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/file_parse", files=[("files", ("page.pdf", b"%PDF-test")), ("files", ("page.html", b"<p>Text</p>"))]
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "completed", response.text
+    assert seen == {".pdf": "all", ".html": "auto"}

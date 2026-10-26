@@ -95,10 +95,11 @@ def test_api_server_rejects_invalid_request_ocr_mode(tmp_path: Path, value: obje
     assert app.state.job_store._jobs == {}
 
 
-def test_api_server_ocr_defaults_to_request_auto_without_startup_configuration(tmp_path: Path) -> None:
-    """请求缺省值固定为 auto，应用生命周期不保存全局 OCR 模式。"""
+def test_api_server_ocr_defaults_to_all_without_startup_configuration(tmp_path: Path) -> None:
+    """The request defaults to all without storing a global OCR mode on the app."""
     request = api_server.CreateJobRequest.model_validate({"files": [{"source": {"type": "local", "path": "/tmp/demo.pdf"}}]})
-    assert request.ocr_mode == "auto"
+    assert request.ocr_mode == "all"
+    assert "ocr_mode" not in request.model_fields_set
     app = api_server.create_app(upload_dir=str(tmp_path), tier="flash")
     assert not hasattr(app.state, "ocr_mode")
     with TestClient(app):
