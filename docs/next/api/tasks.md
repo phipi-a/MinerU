@@ -36,7 +36,8 @@ curl -sS 'http://127.0.0.1:8000/v1/file_parse?tier=flash&response_format=zip' \
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `tier` | 服务默认值 | `flash/basic/standard/advanced`，仍受服务能力约束。 |
-| `ocr_mode` | `auto` | `auto/txt/ocr`。 |
+| `ocr_mode` | 按 tier/格式 | `auto/txt/ocr/all`；PDF/图片的 standard/advanced 默认 `all`。 |
+| `text_source` | `pdf` | `pdf/tesseract/both`，选择 `all` 模式下与 VLM 比较的来源；`both` 按块选择两者中合格且相似度更高的候选，否则保留 VLM。Tesseract 使用英文 OCR。 |
 | `page_range` | 整本 | PDF 页范围，批量文件共用；非 PDF 保持整本解析约束。 |
 | `output_formats` | `markdown` | 重复参数选择 `markdown/middle_json/structured_content/zip`。 |
 | `response_format` | `json` | 同步及结果接口支持 `json/zip`。 |

@@ -19,7 +19,7 @@ from ..filetypes import IMAGE_EXTENSIONS, PAGE_RANGE_PARSE_EXTENSIONS
 from ..integrations.docvortex import read_source_properties
 from ..utils.async_utils import run_sync
 from ..utils.logger import configure_global_log_level
-from ..types import FILE_SUFFIXES, FileSuffix, MiddleJson, ModelJson, PageInfo, Tier
+from ..types import FILE_SUFFIXES, FileSuffix, MiddleJson, ModelJson, PageInfo, TextSource, Tier
 from .base import DocumentParser, ParseResult
 from .tier import effort_for_tier
 
@@ -57,8 +57,14 @@ class MinerUParser(DocumentParser):
         image_analysis: bool = True,
         vlm_config: VlmConfig | None = None,
         positions: bool = False,
+        text_source: TextSource = "pdf",
     ) -> None:
         """保存当前解析器的 VLM 配置副本，避免其他应用或调用修改连接设置。"""
+        if text_source not in {"pdf", "tesseract", "both"}:
+            raise ValueError(f"Unsupported text source: {text_source}")
+        if text_source in {"tesseract", "both"} and (parse_mode != "all" or tier not in {"standard", "advanced"}):
+            raise ValueError("A Tesseract text source requires mode 'all' and the standard or advanced tier")
+        self.text_source = text_source
         self.tier: Tier = tier
         self.effort: _Effort = effort_for_tier(tier)  # type: ignore[assignment]
         if parse_mode == "all" and tier not in {"standard", "advanced"}:
@@ -127,6 +133,7 @@ class MinerUParser(DocumentParser):
             vlm_config=self.vlm_config,
             source_properties=prepared.source_properties,
             **({"positions": True} if self.positions else {}),
+            **({"text_source": self.text_source} if self.text_source != "pdf" else {}),
         )
 
     async def _arun_analysis(self, prepared: _PreparedInput) -> tuple[MiddleJson, ModelJson]:
@@ -142,6 +149,7 @@ class MinerUParser(DocumentParser):
             vlm_config=self.vlm_config,
             source_properties=prepared.source_properties,
             **({"positions": True} if self.positions else {}),
+            **({"text_source": self.text_source} if self.text_source != "pdf" else {}),
         )
 
     def _prepare_input(

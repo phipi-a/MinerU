@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
+from ...types import TextSource
 
 AnalyzeEffort: TypeAlias = Literal["flash", "medium", "high", "xhigh"]
 # Auto resolves to txt/ocr; all explicitly compares native and VLM text per block.
@@ -22,3 +23,4 @@ class AnalysisResult:
     parse_mode: ResolvedParseMode
     elapsed: float
     layout_geometry: dict[str, Any] | None = None
+    text_source: TextSource = "pdf"

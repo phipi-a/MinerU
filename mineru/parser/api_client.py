@@ -136,6 +136,7 @@ class MinerUApiParser(DocumentParser):
         ocr_mode: Literal["auto", "txt", "ocr", "all"] | None = None,
         include_images: bool = False,
         include_model_output: bool = False,
+        text_source: Literal["pdf", "tesseract", "both"] = "pdf",
     ) -> None:
         """保存请求配置；未指定 OCR 模式时省略字段，保留既有客户端的请求结构。"""
         if ocr_mode is not None and ocr_mode not in ("auto", "txt", "ocr", "all"):
@@ -146,6 +147,13 @@ class MinerUApiParser(DocumentParser):
         self._trust_env = should_trust_env_for_url(self._base_url)
         self._source_features: set[str] | None = None
         self.tier = validate_tier(tier) if tier is not None else None
+        if text_source not in {"pdf", "tesseract", "both"}:
+            raise ValueError(f"Unsupported text source: {text_source}")
+        if text_source in {"tesseract", "both"} and (
+            ocr_mode not in {None, "all"} or tier not in {None, "standard", "advanced"}
+        ):
+            raise ValueError("A Tesseract text source requires mode 'all' and the standard or advanced tier")
+        self.text_source = text_source
         self.ocr_mode = ocr_mode
         self.include_images = include_images
         self.include_model_output = include_model_output
@@ -247,6 +255,8 @@ class MinerUApiParser(DocumentParser):
             payload["tier"] = self.tier
         if self.ocr_mode is not None:
             payload["ocr_mode"] = self.ocr_mode
+        if self.text_source != "pdf":
+            payload["text_source"] = self.text_source
         return payload
 
     def _supports_local_source(self) -> bool:

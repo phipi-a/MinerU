@@ -11,7 +11,7 @@ from loguru import logger
 
 from ..config import VlmConfig, config
 from ..integrations.docvortex import build_metadata, read_source_properties
-from ..types import FILE_SUFFIXES, FileSuffix, MiddleJson, ModelJson
+from ..types import TextSource, FILE_SUFFIXES, FileSuffix, MiddleJson, ModelJson
 from ..utils.async_utils import run_sync
 from ..utils.logger import configure_global_log_level
 from ..version import __version__ as mineru_version
@@ -40,10 +40,11 @@ def doc_analyze(
     vlm_config: VlmConfig | None = None,
     source_properties: DocumentProperties | None = None,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> tuple[MiddleJson, ModelJson]:
     """生产严格 ModelJson，并在统一边界构造严格 MiddleJson。"""
     configure_global_log_level()
-    _validate_analyze(effort, file_suffix, page_index_map, parse_mode)
+    _validate_analyze(effort, file_suffix, page_index_map, parse_mode, text_source)
 
     if source_properties is None:
         source_properties = read_source_properties(file_bytes, file_suffix, source_context)
@@ -58,6 +59,7 @@ def doc_analyze(
             image_analysis=image_analysis,
             vlm_config=vlm_config,
             **({"positions": True} if positions else {}),
+            **({"text_source": text_source} if text_source != "pdf" else {}),
         )
     elif file_suffix in ("csv", "tsv"):
         from .analysis.csv import analyze_csv
@@ -105,10 +107,11 @@ async def aio_doc_analyze(
     vlm_config: VlmConfig | None = None,
     source_properties: DocumentProperties | None = None,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> tuple[MiddleJson, ModelJson]:
     """vLLM/HTTP 的 PDF 分析使用原生异步编排，其余路径保持受控线程回退。"""
     configure_global_log_level()
-    _validate_analyze(effort, file_suffix, page_index_map, parse_mode)
+    _validate_analyze(effort, file_suffix, page_index_map, parse_mode, text_source)
     native_async = False
     if file_suffix == "pdf" and effort in {"high", "xhigh"}:
         from ..model.vlm.client import uses_native_async_vlm
@@ -127,6 +130,7 @@ async def aio_doc_analyze(
             vlm_config=vlm_config,
             source_properties=source_properties,
             **({"positions": True} if positions else {}),
+            **({"text_source": text_source} if text_source != "pdf" else {}),
         )
     if source_properties is None:
         source_properties = await run_sync(read_source_properties, file_bytes, file_suffix, source_context)
@@ -140,6 +144,7 @@ async def aio_doc_analyze(
         image_analysis=image_analysis,
         vlm_config=vlm_config,
         **({"positions": True} if positions else {}),
+        **({"text_source": text_source} if text_source != "pdf" else {}),
     )
     model_json = await run_sync(_build_model_json, result, file_suffix, page_index_map, source_properties)
     middle_json = await aio_model_json_to_middle_json(model_json, llm_aided_config=config.llm_aided)
@@ -147,9 +152,19 @@ async def aio_doc_analyze(
 
 
 def _validate_analyze(
-    effort: AnalyzeEffort, file_suffix: FileSuffix, page_index_map: list[int] | None, parse_mode: ParseMode = "auto"
+    effort: AnalyzeEffort,
+    file_suffix: FileSuffix,
+    page_index_map: list[int] | None,
+    parse_mode: ParseMode = "auto",
+    text_source: TextSource = "pdf",
 ) -> None:
     """在加载重依赖之前统一验证同步、异步入口参数。"""
+    if text_source not in {"pdf", "tesseract", "both"}:
+        raise ValueError(f"Unsupported text source: {text_source}")
+    if text_source in {"tesseract", "both"} and (
+        file_suffix != "pdf" or parse_mode != "all" or effort not in {"high", "xhigh"}
+    ):
+        raise ValueError("A Tesseract text source requires PDF input, mode 'all', and the standard or advanced tier")
     if file_suffix not in FILE_SUFFIXES:
         raise ValueError(f"Unsupported file suffix: {file_suffix!r}")
     if file_suffix != "pdf" and page_index_map:
@@ -187,14 +202,20 @@ def _build_model_json(
             original = block.pop("_position_content", None)
             lines = block.pop("_position_lines", [])
             if tokens is not None and original == block.get("content"):
-                position_sources.append({
-                    "page_idx": page_index_map[page_offset] if page_index_map else page_offset,
-                    "index": index, "content": original, "bbox": block.get("bbox"), "tokens": tokens, "lines": lines,
-                })
+                position_sources.append(
+                    {
+                        "page_idx": page_index_map[page_offset] if page_index_map else page_offset,
+                        "index": index,
+                        "content": original,
+                        "bbox": block.get("bbox"),
+                        "tokens": tokens,
+                        "lines": lines,
+                    }
+                )
     if position_sources:
         extensions["mineru_position_sources"] = {"version": 1, "blocks": position_sources}
     if text_selections:
-        extensions["mineru_text_selection"] = {"version": 1, "blocks": text_selections}
+        extensions["mineru_text_selection"] = {"version": 1, "text_source": result.text_source, "blocks": text_selections}
     return ModelJson(
         pages=result.model_list,
         page_index_map=page_index_map or [],

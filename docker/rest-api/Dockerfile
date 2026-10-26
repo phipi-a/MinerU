@@ -6,7 +6,7 @@ FROM ${BASE_IMAGE}
 
 # Reuse the CUDA/Torch/vLLM combination maintained by the upstream GPU image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git ca-certificates libgl1 libglib2.0-0 libgomp1 python3-cairo \
+        build-essential git ca-certificates libgl1 libglib2.0-0 libgomp1 python3-cairo tesseract-ocr tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/mineru-src

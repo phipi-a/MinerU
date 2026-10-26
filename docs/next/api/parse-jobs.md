@@ -57,11 +57,12 @@ Job 状态:
 |------|------|:--:|------|------|
 | `files` | array | 是 | 无 | 至少 1 个，最多由 access level 决定。 |
 | `tier` | string 或 null | 否 | `null` | 当前服务支持的 tier 或 `null`。省略或传 `null` 表示使用默认选择策略；完整 tier 语义见 [解析 Tier](../tiers.md) 与 [ADR-0024](../decisions/0024-file-type-tier-normalization.md)。HTML 输入自动路由到 HTML 解析器。 |
-| `ocr_mode` | string | 否 | `"auto"` | 本次任务的解析模式：`auto` 自动判断、`txt` 使用文本层、`ocr` 强制 OCR。覆盖所有 tier，沿用底层 PDF/图片解析语义；其他格式使用各自的固定解析路径。非法值或 `null` 返回 HTTP 400。 |
+| `ocr_mode` | string | 否 | 按 tier/格式 | `auto` 自动判断、`txt` 使用文本层、`ocr` 强制识别、`all` 按块比较文本候选与 VLM。PDF/图片的 standard/advanced 默认 `all`；其他情况默认 `auto`。非法值或 `null` 返回 HTTP 400。 |
+| `text_source` | string | 否 | `"pdf"` | `all` 模式的候选来源：`pdf` 使用原生文本，`tesseract` 使用独立英文 OCR，`both` 分别比较两者与原始 VLM 的相似度，选择满足校验且相似度更高的候选，平局优先 PDF；均不合格则保留 VLM。含 Tesseract 的模式仅支持 standard/advanced + `all`，且不修改源 PDF。 |
 | `output_formats` | array | 否 | `["markdown"]` | 请求产物格式。 |
 | `callback` | object | 否 | `null` | Webhook 回调配置，官方 API registered 用户可用。 |
 
-`ocr_mode` 在同一任务的文件间共用，任务之间独立。省略时固定使用 `auto`；Local Parse Server 不再通过启动参数设置全局 OCR 模式。
+`ocr_mode` 和 `text_source` 在同一任务的文件间共用，任务之间独立。Local Parse Server 不再通过启动参数设置全局 OCR 模式。Tesseract 的依赖、选择策略和限制见 [Tesseract text source](../../en/reference/tesseract_text_source.md)。
 
 HTML job 固定使用静态 `auto` 正文选择，不执行 JavaScript，也不下载页面引用的远程图片。URL source 的来源 URL
 会用于解析相对链接；本地 source 的相对图片仅允许位于源 HTML 的安全根目录内。

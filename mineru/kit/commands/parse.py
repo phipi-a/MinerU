@@ -47,6 +47,7 @@ def parse_cmd(
     remote_url: str | None = typer.Option(None, "--remote-url", help=t("Use a custom remote parse service URL")),
     api_key: str | None = typer.Option(None, "--api-key", help=t("API key for remote parse service")),
     ocr_mode: str = typer.Option("auto", "--ocr-mode", help=t("OCR mode: auto, txt, ocr, all")),
+    text_source: str = typer.Option("pdf", "--text-source", help=t("Text candidates in all mode: pdf, tesseract, or both")),
     disable_image_analysis: bool = typer.Option(False, "--disable-image-analysis", help=t("Disable image analysis")),
 ) -> None:
     """Parse files or directories into markdown, middle JSON, or zip outputs."""
@@ -57,6 +58,11 @@ def parse_cmd(
     output_format = cast(Literal["markdown", "middle_json", "zip"], format)
     parse_tier = cast(Tier | None, tier)
     parse_ocr_mode = cast(Literal["auto", "txt", "ocr", "all"], ocr_mode)
+    if text_source not in {"pdf", "tesseract", "both"}:
+        exit_with_message("invalid_request", "Text source must be pdf, tesseract, or both", "text_source")
+    parse_text_source = cast(Literal["pdf", "tesseract", "both"], text_source)
+    if text_source in {"tesseract", "both"} and ocr_mode != "all":
+        exit_with_message("invalid_request", "Tesseract text source requires --ocr-mode all", "text_source")
     if not inputs:
         exit_with_message("invalid_request", t("At least one input path is required."), "inputs")
     api_url = build_remote_api_url(remote, remote_url)
@@ -82,7 +88,14 @@ def parse_cmd(
         exit_with_message("invalid_request", str(exc))
 
     if api_url:
-        parser = MinerUApiParser(api_url=api_url, api_key=api_key, tier=parse_tier, include_images=True)
+        parser = MinerUApiParser(
+            api_url=api_url,
+            api_key=api_key,
+            tier=parse_tier,
+            include_images=True,
+            **({"ocr_mode": parse_ocr_mode} if parse_ocr_mode != "auto" else {}),
+            **({"text_source": parse_text_source} if text_source != "pdf" else {}),
+        )
         parse_one = partial(parser.parse, page_range=pages or "")
     else:
         is_batch = has_directory_input or len(paths) > 1
@@ -97,6 +110,7 @@ def parse_cmd(
                 path,
                 tier=path_tier,
                 ocr_mode=parse_ocr_mode,
+                **({"text_source": parse_text_source} if text_source != "pdf" else {}),
                 image_analysis=not disable_image_analysis,
                 page_range=pages or "",
             )

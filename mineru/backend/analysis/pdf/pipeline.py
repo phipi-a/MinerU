@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 from docvortex.document.pdf import PDFDocument
 from loguru import logger
+from ....types import TextSource
 
 from ....utils.timing import stage_timer
 
@@ -38,6 +39,7 @@ class _PDFAnalysis:
     predictor: VlmPredictor | None = None
     parse_mode: ResolvedParseMode = "txt"
     flash_txt_mode: bool = False
+    text_source: TextSource = "pdf"
 
 
 def _prepare_analysis(
@@ -91,10 +93,19 @@ def analyze_pdf(
     image_analysis: bool = True,
     vlm_config: VlmConfig | None = None,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> AnalysisResult:
     """使用共享资源生命周期与同步窗口编排生产 PDF 模型结果。"""
     positions = positions or parse_mode == "all"
-    state = _PDFAnalysis()
+    if text_source not in {"pdf", "tesseract", "both"}:
+        raise ValueError(f"Unsupported text source: {text_source}")
+    if text_source in {"tesseract", "both"}:
+        if parse_mode != "all" or effort not in {"high", "xhigh"}:
+            raise ValueError("A Tesseract text source requires mode 'all' and the standard or advanced tier")
+        from .text.tesseract import check_tesseract
+
+        check_tesseract()
+    state = _PDFAnalysis(text_source=text_source)
     try:
         with stage_timer("pdf.prepare"):
             _prepare_analysis(state, file_bytes, effort, parse_mode, vlm_config)
@@ -109,6 +120,7 @@ def analyze_pdf(
             hybrid_model=state.hybrid_model,
             vlm_predictor=state.predictor,
             **({"positions": True} if positions else {}),
+            **({"text_source": text_source} if text_source != "pdf" else {}),
         )
         result = _build_pdf_analysis_result(state, model_list, effort, infer_started_at)
     finally:
@@ -124,10 +136,19 @@ async def aio_analyze_pdf(
     image_analysis: bool = True,
     vlm_config: VlmConfig | None = None,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> AnalysisResult:
     """原生异步调度 VLM；同步准备、回填与清理使用取消安全的线程边界。"""
     positions = positions or parse_mode == "all"
-    state = _PDFAnalysis()
+    if text_source not in {"pdf", "tesseract", "both"}:
+        raise ValueError(f"Unsupported text source: {text_source}")
+    if text_source in {"tesseract", "both"}:
+        if parse_mode != "all" or effort not in {"high", "xhigh"}:
+            raise ValueError("A Tesseract text source requires mode 'all' and the standard or advanced tier")
+        from .text.tesseract import check_tesseract
+
+        await run_sync(check_tesseract)
+    state = _PDFAnalysis(text_source=text_source)
     try:
         await run_sync(_prepare_analysis, state, file_bytes, effort, parse_mode, vlm_config)
         if state.document is None or state.hybrid_model is None or state.predictor is None:
@@ -142,6 +163,7 @@ async def aio_analyze_pdf(
             hybrid_model=state.hybrid_model,
             vlm_predictor=state.predictor,
             **({"positions": True} if positions else {}),
+            **({"text_source": text_source} if text_source != "pdf" else {}),
         )
         result = await run_sync(_build_pdf_analysis_result, state, model_list, effort, infer_started_at)
     finally:
@@ -166,7 +188,7 @@ def _build_pdf_analysis_result(
     attach_layout_image_rotations(geometry, rotation_pages, None)
     for diagnostic in diagnostics:
         logger.warning("{}: {}", diagnostic.code, diagnostic.message)
-    return AnalysisResult(model_list, effort, state.parse_mode, elapsed, geometry)
+    return AnalysisResult(model_list, effort, state.parse_mode, elapsed, geometry, state.text_source)
 
 
 __all__ = ["analyze_pdf", "aio_analyze_pdf"]

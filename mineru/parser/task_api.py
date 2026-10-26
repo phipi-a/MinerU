@@ -110,6 +110,7 @@ class UploadTaskOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tier: Literal["flash", "basic", "standard", "advanced"] | None = None
     ocr_mode: Literal["auto", "txt", "ocr", "all"] = "all"
+    text_source: Literal["pdf", "tesseract", "both"] = "pdf"
     page_range: str = ""
     output_formats: list[str] = Field(default_factory=lambda: ["markdown"])
     pure_markdown: bool = False
@@ -242,6 +243,7 @@ async def _prepare_submission(
                 tier=options.tier,
                 output_formats=options.output_formats,
                 pure_markdown=options.pure_markdown,
+                text_source=options.text_source,
             )
             if "ocr_mode" in options.model_fields_set:
                 body.ocr_mode = options.ocr_mode

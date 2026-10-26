@@ -496,6 +496,9 @@ class CreateJobRequest(BaseModel):
             "When omitted, Flash/basic and native documents use auto."
         ),
     )
+    text_source: Literal["pdf", "tesseract", "both"] = Field(
+        default="pdf", description="Text candidates in all mode: pdf, tesseract English OCR, or both (standard/advanced)."
+    )
     output_formats: list[str] = ["markdown"]
     pure_markdown: bool = False
     callback: CallbackConfig | None = None
@@ -1775,14 +1778,13 @@ async def _run_job(
                 result = await parse_async(
                     str(tmp_path),
                     tier=effective_tier,
-                    ocr_mode=(
-                        "auto" if "ocr_mode" not in req.model_fields_set and effective_tier == "flash" else req.ocr_mode
-                    ),
+                    ocr_mode=("auto" if "ocr_mode" not in req.model_fields_set and effective_tier == "flash" else req.ocr_mode),
                     image_analysis=image_analysis,
                     page_range=page_range,
                     source_context=source_context,
                     vlm_config=vlm_config,
                     **({"positions": True} if "markdown_map" in rec.output_formats else {}),
+                    **({"text_source": req.text_source} if req.text_source != "pdf" else {}),
                 )
 
                 if rec.status in {"canceled", "failed"}:
@@ -2262,6 +2264,14 @@ async def submit_parse_job(
             code="invalid_request",
             message="ocr_mode='all' requires PDF/image input and the standard or advanced tier",
             param="ocr_mode",
+        )
+    if body.text_source in {"tesseract", "both"} and (body.ocr_mode != "all" or body.tier not in {"standard", "advanced"}):
+        _raise_api_error(
+            400,
+            error_type="invalid_request_error",
+            code="invalid_request",
+            message="A Tesseract text source requires mode 'all' and the standard or advanced tier",
+            param="text_source",
         )
     runtime_options: dict[Tier, ParserRuntimeOptions] = request.app.state.tier_runtime_options
     runtime = runtime_options.get(body.tier)

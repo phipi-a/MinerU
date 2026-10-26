@@ -84,6 +84,8 @@ from docvortex.schema import (
     MiddleJson,
 )
 
+TextSource = Literal["pdf", "tesseract", "both"]
+
 Tier = Literal[
     "flash",
     "basic",
@@ -224,6 +226,7 @@ class ContentTypeV2:
 
 
 __all__ = [
+    "TextSource",
     "RawBlockType",
     "RAW_ALGORITHM",
     "RAW_CAPTION",

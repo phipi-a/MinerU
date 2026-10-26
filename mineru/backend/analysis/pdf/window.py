@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -19,6 +20,8 @@ from docvortex.document.pdf import PDFDocument, PDFPage, PDFPageTextGeometry, PD
 from docvortex.document.pdf.visuals import attach_visual_block_images as _attach_visual_block_images
 from docvortex.document.pdf.visuals import attach_visual_block_images_from_pdf
 from loguru import logger
+from ....types import TextSource
+from .text.tesseract import TesseractWord, recognize_pages
 
 from ....utils.timing import stage_timer
 
@@ -212,7 +215,6 @@ def _process_text_and_formulas(
     from .tables import _apply_medium_table_recognition, _build_table_external_mfr_inputs
     from .text.content import _fill_window_block_content_and_lines, _validate_text_formula_window_inputs
 
-
     _validate_text_formula_window_inputs(
         images_list,
         pdf_pages,
@@ -333,6 +335,7 @@ class _WindowInputs:
     page_text_geometries: list[PDFPageTextGeometry | None] | None
     page_vector_geometries: list[PDFPageVectorGeometry | None] | None = None
     page_snapshots: PageSnapshotCache | None = None
+    tesseract_words: list[list[TesseractWord]] | None = None
 
     def close(self) -> None:
         """推理及回填真正退出后关闭图片，仅清除本层拥有的容器。"""
@@ -348,6 +351,8 @@ class _WindowInputs:
             if self.page_vector_geometries is not None:
                 self.page_vector_geometries.clear()
             clear_page_snapshot_cache(self.page_snapshots)
+            if self.tesseract_words is not None:
+                self.tesseract_words.clear()
 
 
 def _prepare_pdf_window(
@@ -359,6 +364,7 @@ def _prepare_pdf_window(
     effort: AnalyzeEffort,
     parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
+    text_source: TextSource = "pdf",
 ) -> _WindowInputs:
     """渲染并准备布局、原生表格和 VLM 输入；失败时由本阶段关闭图片。"""
     from .tables import _apply_native_txt_table_priority, _apply_table_orientations, _split_native_high_table_blocks
@@ -379,13 +385,16 @@ def _prepare_pdf_window(
                 start_page_id=window.start,
                 end_page_id=window.end,
                 image_type="pil_img",
+                **({"dpi": 300} if text_source in {"tesseract", "both"} else {}),
             )
         if len(window_pages) != len(images_list):
             raise ValueError("Hybrid processing window PDF page count does not match image count")
         images_pil_list = [image_dict["img_pil"] for image_dict in images_list]
         _log_processing_window(window, page_count, len(images_pil_list))
         page_text_geometries = (
-            [None] * len(window_pages) if parse_mode in {"txt", "all"} and effort in {"medium", "high", "xhigh"} else None
+            [None] * len(window_pages)
+            if text_source in {"pdf", "both"} and parse_mode in {"txt", "all"} and effort in {"medium", "high", "xhigh"}
+            else None
         )
         page_vector_geometries = [None] * len(window_pages) if page_text_geometries is not None else None
         page_snapshots = create_page_snapshot_cache(window_pages, enabled=page_text_geometries is not None)
@@ -495,12 +504,13 @@ def _finish_pdf_window(
     parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> list[list[dict[str, Any]]]:
     """按原有顺序回填推理结果、文本公式与视觉素材。"""
     from .formulas import optimize_hybrid_formula_number_blocks
     from .ocr import _apply_seal_ocr
     from .tables import _restore_native_high_table_blocks
-    from .text.selection import prepare_text_candidates, select_text_candidates
+    from .text.selection import prepare_text_candidates, select_text_candidates, select_best_text_candidates
 
     images_list = state.images_list
     window_pages = state.window_pages
@@ -523,7 +533,15 @@ def _finish_pdf_window(
             [_normalize_page_size(image) for image in images_pil_list],
         )
 
-    text_candidates = prepare_text_candidates(window_model_list) if parse_mode == "all" else []
+    # Both producers must start from the same untouched VLM blocks.
+    tesseract_candidates = (
+        [prepare_text_candidates([deepcopy(page)]) for page in window_model_list]
+        if parse_mode == "all" and text_source == "both"
+        else []
+    )
+    text_candidates = (
+        prepare_text_candidates(window_model_list) if parse_mode == "all" and text_source in {"pdf", "both"} else []
+    )
 
     if effort == "flash":
         window_model_list = _process_flash_ocr(
@@ -543,7 +561,7 @@ def _finish_pdf_window(
             images_list,
             window_pages,
             window_model_list,
-            "txt" if parse_mode == "all" else parse_mode,
+            ("txt" if text_source in {"pdf", "both"} else "ocr") if parse_mode == "all" else parse_mode,
             effort,
             local_model_context,
             images_layout_res,
@@ -555,7 +573,22 @@ def _finish_pdf_window(
         )
 
     if parse_mode == "all":
-        select_text_candidates(text_candidates)
+        if text_source in {"tesseract", "both"}:
+            from .text.tesseract import fill_tesseract_candidates
+
+            if state.tesseract_words is None or len(state.tesseract_words) != len(window_model_list):
+                raise ValueError("Tesseract/model page count mismatch")
+            if text_source == "both":
+                for candidates, words in zip(tesseract_candidates, state.tesseract_words, strict=True):
+                    fill_tesseract_candidates(candidates, words)
+                select_best_text_candidates(text_candidates, [candidate for page in tesseract_candidates for candidate in page])
+            else:
+                for page, words in zip(window_model_list, state.tesseract_words, strict=True):
+                    candidates = prepare_text_candidates([page])
+                    fill_tesseract_candidates(candidates, words)
+                    select_text_candidates(candidates, text_source="tesseract")
+        else:
+            select_text_candidates(text_candidates)
 
     if effort in {"medium", "high"}:
         with stage_timer("pdf.seals"):
@@ -602,6 +635,7 @@ def _process_pdf_window(
     hybrid_model: HybridLocalModelContext | None,
     vlm_predictor: VlmPredictor | None,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> list[list[dict[str, Any]]]:
     """同步编排共享窗口阶段，在 VLM 等待期间释放本地模型执行锁。"""
     if hybrid_model is None:
@@ -615,8 +649,12 @@ def _process_pdf_window(
             effort=effort,
             parse_mode=parse_mode,
             hybrid_model=hybrid_model,
+            **({"text_source": text_source} if text_source != "pdf" else {}),
         )
     try:
+        if text_source in {"tesseract", "both"}:
+            with stage_timer("pdf.tesseract"):
+                state.tesseract_words = recognize_pages(state.images_pil_list, page_start=window.start)
         result = state.vl_style_layout_blocks
         if effort in {"high", "xhigh"}:
             if vlm_predictor is None:
@@ -628,7 +666,12 @@ def _process_pdf_window(
                 result = vlm_predictor.batch_two_step_extract(**options)
         with local_model_stage(hybrid_model.device):
             return _finish_pdf_window(
-                state, result, effort=effort, parse_mode=parse_mode, hybrid_model=hybrid_model,
+                state,
+                result,
+                effort=effort,
+                parse_mode=parse_mode,
+                hybrid_model=hybrid_model,
+                **({"text_source": text_source} if text_source != "pdf" else {}),
                 **({"positions": True} if positions else {}),
             )
     finally:
@@ -644,6 +687,7 @@ def _prepare_locked_window(
     effort: AnalyzeEffort,
     parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
+    text_source: TextSource = "pdf",
 ) -> _WindowInputs:
     """在线程内取得和释放本地模型锁，避免事件循环线程等待同步锁。"""
     with local_model_stage(hybrid_model.device):
@@ -655,6 +699,7 @@ def _prepare_locked_window(
             effort=effort,
             parse_mode=parse_mode,
             hybrid_model=hybrid_model,
+            **({"text_source": text_source} if text_source != "pdf" else {}),
         )
 
 
@@ -666,11 +711,17 @@ def _finish_locked_window(
     parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> list[list[dict[str, Any]]]:
     """回填阶段与同步入口共用本地模型执行锁。"""
     with local_model_stage(hybrid_model.device):
         return _finish_pdf_window(
-            state, result, effort=effort, parse_mode=parse_mode, hybrid_model=hybrid_model,
+            state,
+            result,
+            effort=effort,
+            parse_mode=parse_mode,
+            hybrid_model=hybrid_model,
+            **({"text_source": text_source} if text_source != "pdf" else {}),
             **({"positions": True} if positions else {}),
         )
 
@@ -704,6 +755,7 @@ async def aio_process_pdf_windows(
     hybrid_model: HybridLocalModelContext,
     vlm_predictor: VlmPredictor,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> list[list[dict[str, Any]]]:
     """逐窗口原生异步推理；仅不同文档可交错推进，保留单文档内存上界。"""
     page_count = document.page_count
@@ -729,6 +781,7 @@ async def aio_process_pdf_windows(
                         effort=effort,
                         parse_mode=parse_mode,
                         hybrid_model=hybrid_model,
+                        **({"text_source": text_source} if text_source != "pdf" else {}),
                     )
                 )
 
@@ -736,6 +789,9 @@ async def aio_process_pdf_windows(
                 await _run_window_prepare(prepare, render_session)
             finally:
                 state = holder[0] if holder else None
+            if text_source in {"tesseract", "both"}:
+                with stage_timer("pdf.tesseract"):
+                    state.tesseract_words = await run_sync(recognize_pages, state.images_pil_list, page_start=window.start)
             options = _inference_options(state, effort, parse_mode, image_analysis)
             if effort == "high":
                 result = await vlm_predictor.aio_batch_extract_with_layout(**options)
@@ -749,6 +805,7 @@ async def aio_process_pdf_windows(
                     effort=effort,
                     parse_mode=parse_mode,
                     hybrid_model=hybrid_model,
+                    **({"text_source": text_source} if text_source != "pdf" else {}),
                     **({"positions": True} if positions else {}),
                 )
             )
@@ -775,6 +832,7 @@ def process_pdf_windows(
     hybrid_model: HybridLocalModelContext | None,
     vlm_predictor: VlmPredictor | None,
     positions: bool = False,
+    text_source: TextSource = "pdf",
 ) -> list[list[dict[str, Any]]]:
     """按固定阶段处理全部 PDF 窗口并返回完整 model-list。"""
     page_count = document.page_count
@@ -818,6 +876,7 @@ def process_pdf_windows(
                     parse_mode=parse_mode,
                     image_analysis=image_analysis,
                     hybrid_model=hybrid_model,
+                    **({"text_source": text_source} if text_source != "pdf" else {}),
                     vlm_predictor=vlm_predictor,
                     **({"positions": True} if positions else {}),
                 )
