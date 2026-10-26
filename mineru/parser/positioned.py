@@ -33,7 +33,8 @@ def positioned_document(middle: MiddleJson, model: ModelJson | None) -> dict[str
     by_identity = {(r["page_idx"], r["index"]): r for r in records}
     entries: list[dict[str, Any]] = []
     for page_offset, page in enumerate(result["pages"]):
-        for block_offset, block in enumerate(page["blocks"]):
+        # Default-skipping serialization omits the blocks array on empty pages.
+        for block_offset, block in enumerate(page.get("blocks", [])):
             _visit_block(block, page["page_idx"], f"/pages/{page_offset}/blocks/{block_offset}", by_identity, entries)
     result["extensions"].pop(SOURCE_EXTENSION, None)
     result["extensions"][OUTPUT_EXTENSION] = {

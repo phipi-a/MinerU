@@ -145,6 +145,39 @@ def test_missing_provenance_falls_back_to_existing_block_box() -> None:
     assert mapping["pages"][0]["blocks"][0]["level"] == "block"
 
 
+@pytest.mark.parametrize("pure_markdown", [False, True])
+@pytest.mark.parametrize("empty_only", [False, True])
+def test_empty_pages_preserve_source_map_page_offsets(pure_markdown: bool, empty_only: bool) -> None:
+    from mineru.parser.positioned import positioned_document
+    from mineru.types import PageInfo
+
+    result = make_result([{"type": "text", "content": "Plain text"}])
+    text_page = result.pages[0]
+    result.middle_json.pages = [PageInfo(page_idx=0, blocks=[])]
+    if not empty_only:
+        result.middle_json.pages.extend([text_page, PageInfo(page_idx=6, blocks=[])])
+    before = result.to_dict()
+    assert "blocks" not in before["pages"][0]
+
+    positioned = positioned_document(result.middle_json, None)
+    markdown, mapping = result.markdown_with_map(pure_markdown=pure_markdown)
+
+    assert markdown == result.markdown(pure_markdown=pure_markdown)
+    assert mapping["markdown_sha256"] == hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+    assert mapping["pages"][0] == {"page_idx": 0, "blocks": []}
+    if empty_only:
+        assert markdown == ""
+        assert positioned["extensions"]["mineru_positions"]["entries"] == []
+        assert len(mapping["pages"]) == 1
+    else:
+        assert [page["page_idx"] for page in mapping["pages"]] == [0, 5, 6]
+        assert mapping["pages"][2]["blocks"] == []
+        assert mapping["pages"][1]["blocks"][0]["element"] == "/pages/1/blocks/0"
+        assert positioned["extensions"]["mineru_positions"]["entries"][0]["element"] == "/pages/1/blocks/0"
+        assert slices(markdown, mapping) == ["Plain", "text"]
+    assert result.to_dict() == before
+
+
 def test_context_sensitive_escaping_is_not_guessed() -> None:
     result = make_result([{"type": "text", "content": "<b> text </b>"}])
     markdown, mapping = result.markdown_with_map()
