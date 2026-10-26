@@ -6,7 +6,7 @@ FROM ${BASE_IMAGE}
 
 # Reuse the CUDA/Torch/vLLM combination maintained by the upstream GPU image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git ca-certificates libgl1 libglib2.0-0 libgomp1 \
+        build-essential git ca-certificates libgl1 libglib2.0-0 libgomp1 python3-cairo \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/mineru-src
@@ -23,6 +23,7 @@ RUN --mount=from=rust-toolchain,source=/usr/local,target=/opt/rust,ro \
     && VLLM_REQUIREMENT="$(python3 -c 'import importlib.metadata; print("vllm==" + importlib.metadata.version("vllm"))')" \
     && python3 -m pip install --no-cache-dir --constraint /tmp/base-constraints.txt \
          '.[torch]' "$DOCVORTEX_REQUIREMENT" "$VLLM_REQUIREMENT" \
+    && python3 -m pip check \
     && python3 -c 'import importlib.metadata as m, json, tomllib; s=tomllib.load(open("pyproject.toml", "rb"))["tool"]["uv"]["sources"]["docvortex"]; d=json.loads(m.distribution("docvortex").read_text("direct_url.json")); assert d["url"] == s["git"] and d["vcs_info"]["commit_id"] == s["rev"]' \
     && python3 -c 'from docvortex._compute_backend import get_native; assert get_native() is not None; from mineru_llama_cpp import Engine' \
     && rm -rf /root/.cargo /root/.cache /tmp/base-constraints.txt
