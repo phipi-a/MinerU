@@ -184,7 +184,7 @@ class V1ArtifactClient:
         *,
         tier: str,
         page_range: str,
-        ocr_mode: Literal["auto", "txt", "ocr"] = "auto",
+        ocr_mode: Literal["auto", "txt", "ocr", "all"] = "auto",
         status_callback: Callable[[str | ParseStatusUpdate], None] | None = None,
     ) -> ParseResult:
         """通过 V1 API 解析单个文件，并返回带图片/模型输出的 `ParseResult`。"""
@@ -272,7 +272,7 @@ class GradioArtifactClient:
         *,
         tier: str,
         page_range: str,
-        ocr_mode: Literal["auto", "txt", "ocr"] = "auto",
+        ocr_mode: Literal["auto", "txt", "ocr", "all"] = "auto",
         status_callback: Callable[[str | ParseStatusUpdate], None] | None = None,
     ) -> ParseResult:
         """仅向该档位对应的服务提交文件，复用原有状态、取消和产物流程。"""

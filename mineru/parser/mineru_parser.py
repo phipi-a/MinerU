@@ -26,7 +26,7 @@ from .tier import effort_for_tier
 logger = logging.getLogger(__name__)
 
 _Effort = Literal["flash", "medium", "high", "xhigh"]
-_ParseMode = Literal["auto", "txt", "ocr"]
+_ParseMode = Literal["auto", "txt", "ocr", "all"]
 
 
 @dataclass
@@ -61,6 +61,8 @@ class MinerUParser(DocumentParser):
         """保存当前解析器的 VLM 配置副本，避免其他应用或调用修改连接设置。"""
         self.tier: Tier = tier
         self.effort: _Effort = effort_for_tier(tier)  # type: ignore[assignment]
+        if parse_mode == "all" and tier not in {"standard", "advanced"}:
+            raise ValueError("parse_mode='all' requires the standard or advanced tier")
         self.parse_mode: _ParseMode = parse_mode
         self.image_analysis: bool = image_analysis
         self.positions = positions

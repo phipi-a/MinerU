@@ -109,7 +109,7 @@ class UploadTaskOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     tier: Literal["flash", "basic", "standard", "advanced"] | None = None
-    ocr_mode: Literal["auto", "txt", "ocr"] = "auto"
+    ocr_mode: Literal["auto", "txt", "ocr", "all"] = "auto"
     page_range: str = ""
     output_formats: list[str] = Field(default_factory=lambda: ["markdown"])
     pure_markdown: bool = False

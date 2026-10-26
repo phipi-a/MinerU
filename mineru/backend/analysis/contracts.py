@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
 AnalyzeEffort: TypeAlias = Literal["flash", "medium", "high", "xhigh"]
-# 请求阶段允许自动分类，分析结果中的模式必须已经收敛为 txt 或 ocr。
-ParseMode: TypeAlias = Literal["auto", "txt", "ocr"]
-ResolvedParseMode: TypeAlias = Literal["txt", "ocr"]
+# Auto resolves to txt/ocr; all explicitly compares native and VLM text per block.
+ParseMode: TypeAlias = Literal["auto", "txt", "ocr", "all"]
+ResolvedParseMode: TypeAlias = Literal["txt", "ocr", "all"]
 OfficeSuffix: TypeAlias = Literal["doc", "docx", "ppt", "pptx", "xls", "xlsx", "rtf", "odt", "ods", "odp"]
 
 

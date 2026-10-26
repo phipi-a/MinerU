@@ -133,12 +133,12 @@ class MinerUApiParser(DocumentParser):
         api_url: str | None = None,
         api_key: str | None = None,
         tier: Tier | None = None,
-        ocr_mode: Literal["auto", "txt", "ocr"] | None = None,
+        ocr_mode: Literal["auto", "txt", "ocr", "all"] | None = None,
         include_images: bool = False,
         include_model_output: bool = False,
     ) -> None:
         """保存请求配置；未指定 OCR 模式时省略字段，保留既有客户端的请求结构。"""
-        if ocr_mode is not None and ocr_mode not in ("auto", "txt", "ocr"):
+        if ocr_mode is not None and ocr_mode not in ("auto", "txt", "ocr", "all"):
             raise ValueError(f"Unsupported OCR mode '{ocr_mode}'")
         self._base_url = (api_url or os.environ.get("MINERU_API_URL") or self.DEFAULT_API_URL).rstrip("/")
         self._api_key = (api_key if api_key is not None else os.environ.get("MINERU_API_KEY")) or None

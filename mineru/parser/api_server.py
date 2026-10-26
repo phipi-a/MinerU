@@ -488,8 +488,12 @@ class CreateJobRequest(BaseModel):
     model_config = _PYDANTIC_CONFIG
     files: list[JobFileEntry] = Field(min_length=1, max_length=_MAX_FILES_PER_JOB_DEFAULT)
     tier: Tier | None = None
-    ocr_mode: Literal["auto", "txt", "ocr"] = Field(
-        default="auto", description="OCR mode for this parse job: auto-detect, native text, or forced OCR."
+    ocr_mode: Literal["auto", "txt", "ocr", "all"] = Field(
+        default="auto",
+        description=(
+            "auto: classify; txt: native text; ocr: force recognition; "
+            "all: compare PDF/VLM text per block (standard/advanced)."
+        ),
     )
     output_formats: list[str] = ["markdown"]
     pure_markdown: bool = False
@@ -2246,6 +2250,14 @@ async def submit_parse_job(
             )
     else:
         body.tier = body.tier or default_tier
+    if body.ocr_mode == "all" and (body.tier not in {"standard", "advanced"} or can_default_to_flash):
+        _raise_api_error(
+            400,
+            error_type="invalid_request_error",
+            code="invalid_request",
+            message="ocr_mode='all' requires PDF/image input and the standard or advanced tier",
+            param="ocr_mode",
+        )
     runtime_options: dict[Tier, ParserRuntimeOptions] = request.app.state.tier_runtime_options
     runtime = runtime_options.get(body.tier)
     if runtime is None and can_default_to_flash:

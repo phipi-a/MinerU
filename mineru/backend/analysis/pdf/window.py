@@ -25,7 +25,7 @@ from ....utils.timing import stage_timer
 from ....model.runtime.execution import local_model_stage
 from ....utils.async_utils import drain_future, run_sync
 from ....model.runtime.memory import trim_process_heap
-from ..contracts import AnalyzeEffort
+from ..contracts import AnalyzeEffort, ResolvedParseMode
 from .constants import (
     BATCH_RATIO,
     LAYOUT_BASE_BATCH_SIZE,
@@ -357,7 +357,7 @@ def _prepare_pdf_window(
     *,
     page_count: int,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
 ) -> _WindowInputs:
     """渲染并准备布局、原生表格和 VLM 输入；失败时由本阶段关闭图片。"""
@@ -385,7 +385,7 @@ def _prepare_pdf_window(
         images_pil_list = [image_dict["img_pil"] for image_dict in images_list]
         _log_processing_window(window, page_count, len(images_pil_list))
         page_text_geometries = (
-            [None] * len(window_pages) if parse_mode == "txt" and effort in {"medium", "high", "xhigh"} else None
+            [None] * len(window_pages) if parse_mode in {"txt", "all"} and effort in {"medium", "high", "xhigh"} else None
         )
         page_vector_geometries = [None] * len(window_pages) if page_text_geometries is not None else None
         page_snapshots = create_page_snapshot_cache(window_pages, enabled=page_text_geometries is not None)
@@ -406,7 +406,7 @@ def _prepare_pdf_window(
                 with stage_timer("pdf.table_orientation"):
                     _apply_table_orientations(
                         table_items,
-                        parse_mode,
+                        "ocr" if parse_mode == "all" else parse_mode,
                         window_pages,
                         images_list,
                         local_model_context,
@@ -492,7 +492,7 @@ def _finish_pdf_window(
     window_model_list: list[Any],
     *,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
     positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
@@ -500,6 +500,7 @@ def _finish_pdf_window(
     from .formulas import optimize_hybrid_formula_number_blocks
     from .ocr import _apply_seal_ocr
     from .tables import _restore_native_high_table_blocks
+    from .text.selection import prepare_text_candidates, select_text_candidates
 
     images_list = state.images_list
     window_pages = state.window_pages
@@ -522,6 +523,8 @@ def _finish_pdf_window(
             [_normalize_page_size(image) for image in images_pil_list],
         )
 
+    text_candidates = prepare_text_candidates(window_model_list) if parse_mode == "all" else []
+
     if effort == "flash":
         window_model_list = _process_flash_ocr(
             images_list,
@@ -540,7 +543,7 @@ def _finish_pdf_window(
             images_list,
             window_pages,
             window_model_list,
-            parse_mode,
+            "txt" if parse_mode == "all" else parse_mode,
             effort,
             local_model_context,
             images_layout_res,
@@ -550,6 +553,9 @@ def _finish_pdf_window(
             np_images=np_images,
             **({"positions": True} if positions else {}),
         )
+
+    if parse_mode == "all":
+        select_text_candidates(text_candidates)
 
     if effort in {"medium", "high"}:
         with stage_timer("pdf.seals"):
@@ -572,7 +578,7 @@ def _finish_pdf_window(
 def _inference_options(
     state: _WindowInputs,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     image_analysis: bool,
 ) -> dict[str, Any]:
     """生成同步、异步共同使用的抽取参数，保持 TXT 类型过滤与图片开关。"""
@@ -591,7 +597,7 @@ def _process_pdf_window(
     *,
     page_count: int,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     image_analysis: bool,
     hybrid_model: HybridLocalModelContext | None,
     vlm_predictor: VlmPredictor | None,
@@ -636,7 +642,7 @@ def _prepare_locked_window(
     *,
     page_count: int,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
 ) -> _WindowInputs:
     """在线程内取得和释放本地模型锁，避免事件循环线程等待同步锁。"""
@@ -657,7 +663,7 @@ def _finish_locked_window(
     result: list[Any],
     *,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     hybrid_model: HybridLocalModelContext,
     positions: bool = False,
 ) -> list[list[dict[str, Any]]]:
@@ -693,7 +699,7 @@ async def aio_process_pdf_windows(
     document: PDFDocument,
     *,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     image_analysis: bool,
     hybrid_model: HybridLocalModelContext,
     vlm_predictor: VlmPredictor,
@@ -763,7 +769,7 @@ def process_pdf_windows(
     document: PDFDocument,
     *,
     effort: AnalyzeEffort,
-    parse_mode: Literal["txt", "ocr"],
+    parse_mode: ResolvedParseMode,
     image_analysis: bool,
     flash_txt_mode: bool,
     hybrid_model: HybridLocalModelContext | None,

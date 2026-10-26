@@ -46,7 +46,7 @@ def parse_cmd(
     remote: bool = typer.Option(False, "--remote", help=t("Use mineru.net official remote parse service")),
     remote_url: str | None = typer.Option(None, "--remote-url", help=t("Use a custom remote parse service URL")),
     api_key: str | None = typer.Option(None, "--api-key", help=t("API key for remote parse service")),
-    ocr_mode: str = typer.Option("auto", "--ocr-mode", help=t("OCR mode: auto, txt, ocr")),
+    ocr_mode: str = typer.Option("auto", "--ocr-mode", help=t("OCR mode: auto, txt, ocr, all")),
     disable_image_analysis: bool = typer.Option(False, "--disable-image-analysis", help=t("Disable image analysis")),
 ) -> None:
     """Parse files or directories into markdown, middle JSON, or zip outputs."""
@@ -56,7 +56,7 @@ def parse_cmd(
         exit_with_message(exc.code, str(exc), "pages")
     output_format = cast(Literal["markdown", "middle_json", "zip"], format)
     parse_tier = cast(Tier | None, tier)
-    parse_ocr_mode = cast(Literal["auto", "txt", "ocr"], ocr_mode)
+    parse_ocr_mode = cast(Literal["auto", "txt", "ocr", "all"], ocr_mode)
     if not inputs:
         exit_with_message("invalid_request", t("At least one input path is required."), "inputs")
     api_url = build_remote_api_url(remote, remote_url)

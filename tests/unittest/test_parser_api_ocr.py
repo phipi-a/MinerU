@@ -19,17 +19,18 @@ from mineru.parser.api_client import MinerUApiParser
 
 
 @pytest.mark.parametrize("use_async", [False, True])
-@pytest.mark.parametrize("ocr_mode", [None, "auto", "txt", "ocr"])
+@pytest.mark.parametrize("ocr_mode", [None, "auto", "txt", "ocr", "all"])
 def test_api_parser_serializes_request_ocr_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     use_async: bool,
-    ocr_mode: Literal["auto", "txt", "ocr"] | None,
+    ocr_mode: Literal["auto", "txt", "ocr", "all"] | None,
 ) -> None:
     """通过正式 HTTP 提交流程检查两个入口的显式模式与缺省字段。"""
     source = tmp_path / "demo.pdf"
     source.write_bytes(b"%PDF-1.7\n")
-    parser = MinerUApiParser(api_url="http://localhost:8000", tier="flash", ocr_mode=ocr_mode)
+    tier = "standard" if ocr_mode == "all" else "flash"
+    parser = MinerUApiParser(api_url="http://localhost:8000", tier=tier, ocr_mode=ocr_mode)
     parser._source_features = {"local"}
     payloads: list[dict[str, Any]] = []
 
@@ -61,7 +62,7 @@ def test_api_parser_serializes_request_ocr_mode(
 
     expected: dict[str, Any] = {
         "files": [{"source": {"type": "local", "path": str(source)}, "page_range": "1"}],
-        "tier": "flash",
+        "tier": tier,
         "output_formats": ["middle_json"],
     }
     if ocr_mode is not None:

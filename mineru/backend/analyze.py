@@ -43,7 +43,7 @@ def doc_analyze(
 ) -> tuple[MiddleJson, ModelJson]:
     """生产严格 ModelJson，并在统一边界构造严格 MiddleJson。"""
     configure_global_log_level()
-    _validate_analyze(effort, file_suffix, page_index_map)
+    _validate_analyze(effort, file_suffix, page_index_map, parse_mode)
 
     if source_properties is None:
         source_properties = read_source_properties(file_bytes, file_suffix, source_context)
@@ -108,7 +108,7 @@ async def aio_doc_analyze(
 ) -> tuple[MiddleJson, ModelJson]:
     """vLLM/HTTP 的 PDF 分析使用原生异步编排，其余路径保持受控线程回退。"""
     configure_global_log_level()
-    _validate_analyze(effort, file_suffix, page_index_map)
+    _validate_analyze(effort, file_suffix, page_index_map, parse_mode)
     native_async = False
     if file_suffix == "pdf" and effort in {"high", "xhigh"}:
         from ..model.vlm.client import uses_native_async_vlm
@@ -146,7 +146,9 @@ async def aio_doc_analyze(
     return middle_json, model_json
 
 
-def _validate_analyze(effort: AnalyzeEffort, file_suffix: FileSuffix, page_index_map: list[int] | None) -> None:
+def _validate_analyze(
+    effort: AnalyzeEffort, file_suffix: FileSuffix, page_index_map: list[int] | None, parse_mode: ParseMode = "auto"
+) -> None:
     """在加载重依赖之前统一验证同步、异步入口参数。"""
     if file_suffix not in FILE_SUFFIXES:
         raise ValueError(f"Unsupported file suffix: {file_suffix!r}")
@@ -154,6 +156,8 @@ def _validate_analyze(effort: AnalyzeEffort, file_suffix: FileSuffix, page_index
         raise ValueError(f"page_index_map is only supported for PDF files, got {file_suffix!r}")
     if effort not in _SUPPORTED_ANALYZE_EFFORTS:
         raise ValueError(f"Unsupported analyze effort: {effort}")
+    if parse_mode == "all" and (file_suffix != "pdf" or effort not in {"high", "xhigh"}):
+        raise ValueError("parse_mode='all' requires PDF input and the standard or advanced tier")
 
 
 def _build_model_json(
@@ -169,9 +173,16 @@ def _build_model_json(
         from docvortex.document.pdf.layout import LAYOUT_EXTENSION, remap_layout_geometry
 
         extensions[LAYOUT_EXTENSION] = remap_layout_geometry(result.layout_geometry, page_index_map)
+    from .analysis.pdf.text.selection import SELECTION_FIELD
+
     position_sources = []
+    text_selections = []
     for page_offset, blocks in enumerate(result.model_list):
         for index, block in enumerate(blocks):
+            page_idx = page_index_map[page_offset] if page_index_map else page_offset
+            decision = block.pop(SELECTION_FIELD, None)
+            if decision is not None:
+                text_selections.append({"page_idx": page_idx, "index": index, "bbox": block.get("bbox"), **decision})
             tokens = block.pop("_position_tokens", None)
             original = block.pop("_position_content", None)
             lines = block.pop("_position_lines", [])
@@ -182,6 +193,8 @@ def _build_model_json(
                 })
     if position_sources:
         extensions["mineru_position_sources"] = {"version": 1, "blocks": position_sources}
+    if text_selections:
+        extensions["mineru_text_selection"] = {"version": 1, "blocks": text_selections}
     return ModelJson(
         pages=result.model_list,
         page_index_map=page_index_map or [],

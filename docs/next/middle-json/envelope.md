@@ -34,8 +34,17 @@ Python 使用 `document.metadata.file_suffix` 和 `document.metadata.producer`�
 
 `extensions.mineru` 仅含实际 `tier` 和最终 `parse_mode`；
 `flash/medium/high/xhigh` 映射为 `flash/basic/standard/advanced`。
-仅接受 `txt/ocr`，不存请求值或 `auto`，不重复存 `effort/mineru_version`。
+仅接受 `txt/ocr/all`，不存 `auto`，不重复存 `effort/mineru_version`。
 MinerU 校验已存在的自身扩展；DocVortex 不依赖产品枚举，完整保留其他应用扩展。
+
+`all` identifies the executed per-block native/VLM comparison strategy, available
+for PDF input at the standard and advanced tiers. Its final per-block choices are
+recorded separately in `extensions.mineru_text_selection`: `version: 1` and a
+`blocks` array with original `page_idx`, raw model block `index`, normalized
+`bbox`, selected `source` (`txt` or `vlm`), `reason`, prose `similarity`, and the
+applied `threshold`. These are analysis decisions, not pointers into the final
+Middle JSON tree; deterministic postprocessing can regroup blocks. No additional
+fields are added inside the strict `extensions.mineru` object.
 
 ## 序列化和素材
 

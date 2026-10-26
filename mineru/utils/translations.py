@@ -448,6 +448,7 @@ ZH_MESSAGES: dict[str, str] = {
     "Use a custom remote parse service URL": "使用自定义远程解析服务 URL",
     "API key for remote parse service": "远程解析服务的 API key",
     "OCR mode: auto, txt, ocr": "OCR 模式: auto、txt、ocr",
+    "OCR mode: auto, txt, ocr, all": "OCR 模式: auto、txt、ocr、all",
     "Disable image analysis": "禁用图像分析",
     "At least one input path is required.": "至少需要一个输入路径。",
     "When input is multiple files or directories, --output must be a directory path.": (

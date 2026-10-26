@@ -238,3 +238,41 @@ new shared `RenderFormat` and is not automatically exposed by every CLI.
 The script submits a real Advanced job, downloads both files, verifies the exact
 byte hash, checks every range/box, and saves request/response, statistics, and
 formatted token examples. It refuses to overwrite an existing directory.
+
+## Per-block PDF/VLM comparison with `ocr_mode="all"`
+
+For PDF input at the standard or advanced tier, `ocr_mode="all"` runs full VLM
+recognition and independently fills native text candidates in the same layout
+blocks. It does not use document classification and does not save a VLM pass.
+
+Each eligible text block keeps native content and its word positions only when
+the normalized prose agrees sufficiently with the VLM reference and native word
+geometry is available. Otherwise it keeps the original VLM block without native
+word-position sidecars. Different blocks on the same page can select different
+sources. Existing `auto`, `txt`, and `ocr` behavior is unchanged.
+
+```python
+from mineru.parser import parse
+
+result = parse("book.pdf", tier="advanced", ocr_mode="all", positions=True)
+markdown, mapping = result.markdown_with_map()
+```
+
+The REST Jobs API and upload task options accept the same `ocr_mode` value.
+The CLI accepts `mineru-kit parse book.pdf --tier advanced --ocr-mode all`.
+Flash/basic tiers and non-PDF native inputs do not support this comparison mode.
+
+The initial rule uses a fixed 0.90 character similarity on normalized prose;
+texts shorter than 20 normalized characters must match exactly. Normalization
+accounts for case, compatibility ligatures, line-break hyphenation, punctuation,
+and styling. Inline math is excluded from this prose comparison because LaTeX
+spellings can differ; this rule does not establish mathematical equivalence.
+Control characters, missing comparable prose, and missing native word positions
+cause VLM fallback. Similarity is a heuristic, not a calibrated probability or a
+guarantee of transcription correctness.
+
+The actual executed mode is `extensions.mineru.parse_mode="all"`. Per-block
+selection reasons and scores are recorded in `extensions.mineru_text_selection`
+as documented in the Middle JSON envelope specification. Word-position capture
+is enabled internally for `all` even when a map is not requested, so output-format
+selection cannot change the chosen text.

@@ -13,7 +13,7 @@ class MinerUMetadata(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True)
     tier: Literal["flash", "basic", "standard", "advanced"]
-    parse_mode: Literal["txt", "ocr"]
+    parse_mode: Literal["txt", "ocr", "all"]
 
 
 def build_metadata(*, effort: str, parse_mode: str) -> dict[str, JsonValue]:

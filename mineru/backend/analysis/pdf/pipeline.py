@@ -53,10 +53,12 @@ def _prepare_analysis(
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     if effort not in _SUPPORTED_PDF_EFFORTS:
         raise ValueError(f"Unsupported analyze effort: {effort}")
+    if parse_mode == "all" and effort not in {"high", "xhigh"}:
+        raise ValueError("parse_mode='all' requires the standard or advanced tier")
     state.document = PDFDocument(file_bytes)
     if parse_mode == "auto":
         parse_mode = state.document.classify()
-    if parse_mode not in ["txt", "ocr"]:
+    if parse_mode not in ["txt", "ocr", "all"]:
         raise ValueError(f"parse_mode {parse_mode} is not supported")
     state.parse_mode = cast(ResolvedParseMode, parse_mode)
     state.flash_txt_mode = effort == "flash" and state.parse_mode == "txt"
@@ -91,6 +93,7 @@ def analyze_pdf(
     positions: bool = False,
 ) -> AnalysisResult:
     """使用共享资源生命周期与同步窗口编排生产 PDF 模型结果。"""
+    positions = positions or parse_mode == "all"
     state = _PDFAnalysis()
     try:
         with stage_timer("pdf.prepare"):
@@ -123,6 +126,7 @@ async def aio_analyze_pdf(
     positions: bool = False,
 ) -> AnalysisResult:
     """原生异步调度 VLM；同步准备、回填与清理使用取消安全的线程边界。"""
+    positions = positions or parse_mode == "all"
     state = _PDFAnalysis()
     try:
         await run_sync(_prepare_analysis, state, file_bytes, effort, parse_mode, vlm_config)
