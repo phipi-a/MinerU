@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Literal
@@ -757,46 +757,59 @@ async def aio_process_pdf_windows(
     positions: bool = False,
     text_source: TextSource = "pdf",
 ) -> list[list[dict[str, Any]]]:
-    """逐窗口原生异步推理；仅不同文档可交错推进，保留单文档内存上界。"""
+    """流水线式异步推理：窗口 N 的 VLM 运行期间，回填窗口 N-1 并准备窗口 N+1。
+
+    本地模型阶段仍由执行锁串行化；回填先于下一窗口准备并立即释放资源，
+    因此单文档同时最多持有两个窗口的页面图像。结果按窗口顺序拼接。
+    """
     page_count = document.page_count
     window_size = _configured_window_size(default=64)
     windows = _build_processing_windows(page_count, window_size)
     _log_processing_window_plan(page_count, window_size, len(windows))
-    model_list = []
+    model_list: list[list[dict[str, Any]]] = []
     render_session = get_document_render_session(document) if windows else None
-    for window in windows:
-        state = None
-        try:
-            # 让资源在外层拥有：准备线程取消后仍需要关闭其成功返回的图片。
-            holder: list[_WindowInputs] = []
+    # 外层拥有全部已准备窗口：任一阶段失败或取消时仍能关闭其图片。
+    open_states: list[_WindowInputs] = []
 
-            def prepare() -> None:
-                """显式交接窗口所有权，使取消不会丢失线程返回的资源。"""
-                holder.append(
-                    _prepare_locked_window(
-                        file_bytes,
-                        document,
-                        window,
-                        page_count=page_count,
-                        effort=effort,
-                        parse_mode=parse_mode,
-                        hybrid_model=hybrid_model,
-                        **({"text_source": text_source} if text_source != "pdf" else {}),
-                    )
+    async def prepare(window: _ProcessingWindow) -> _WindowInputs:
+        """准备窗口并在需要时运行 Tesseract；两者都不占用 VLM。"""
+        holder: list[_WindowInputs] = []
+
+        def prepare_locked() -> None:
+            """显式交接窗口所有权，使取消不会丢失线程返回的资源。"""
+            holder.append(
+                _prepare_locked_window(
+                    file_bytes,
+                    document,
+                    window,
+                    page_count=page_count,
+                    effort=effort,
+                    parse_mode=parse_mode,
+                    hybrid_model=hybrid_model,
+                    **({"text_source": text_source} if text_source != "pdf" else {}),
                 )
+            )
 
-            try:
-                await _run_window_prepare(prepare, render_session)
-            finally:
-                state = holder[0] if holder else None
-            if text_source in {"tesseract", "both"}:
-                with stage_timer("pdf.tesseract"):
-                    state.tesseract_words = await run_sync(recognize_pages, state.images_pil_list, page_start=window.start)
-            options = _inference_options(state, effort, parse_mode, image_analysis)
-            if effort == "high":
-                result = await vlm_predictor.aio_batch_extract_with_layout(**options)
-            else:
-                result = await vlm_predictor.aio_batch_two_step_extract(**options)
+        try:
+            await _run_window_prepare(prepare_locked, render_session)
+        finally:
+            open_states.extend(holder)
+        state = holder[0]
+        if text_source in {"tesseract", "both"}:
+            with stage_timer("pdf.tesseract"):
+                state.tesseract_words = await run_sync(recognize_pages, state.images_pil_list, page_start=window.start)
+        return state
+
+    async def infer(state: _WindowInputs) -> list[Any]:
+        """在 VLM 进程中推理窗口，不占用本地模型执行锁。"""
+        options = _inference_options(state, effort, parse_mode, image_analysis)
+        if effort == "high":
+            return await vlm_predictor.aio_batch_extract_with_layout(**options)
+        return await vlm_predictor.aio_batch_two_step_extract(**options)
+
+    async def finish(state: _WindowInputs, result: list[Any]) -> None:
+        """回填后立即释放窗口资源，再允许准备下一窗口。"""
+        try:
             model_list.extend(
                 await run_sync(
                     _finish_locked_window,
@@ -809,16 +822,55 @@ async def aio_process_pdf_windows(
                     **({"positions": True} if positions else {}),
                 )
             )
-        except asyncio.CancelledError:
-            if render_session is not None:
-                cleanup = asyncio.create_task(asyncio.to_thread(render_session.cancel))
-                await drain_future(cleanup)
-            raise
         finally:
-            if state is not None:
-                await run_sync(state.close)
+            open_states.remove(state)
+            await run_sync(state.close)
+            await run_sync(trim_process_heap)
+
+    async def finish_then_prepare(
+        pending: tuple[_WindowInputs, list[Any]] | None, next_window: _ProcessingWindow | None
+    ) -> _WindowInputs | None:
+        """先回填并释放上一窗口，再准备下一窗口，保证最多持有两个窗口。"""
+        if pending is not None:
+            await finish(*pending)
+        return await prepare(next_window) if next_window is not None else None
+
+    try:
+        pending: tuple[_WindowInputs, list[Any]] | None = None
+        state = await prepare(windows[0]) if windows else None
+        for index in range(len(windows)):
+            next_window = windows[index + 1] if index + 1 < len(windows) else None
+            result, next_state = await _gather_window_stages(infer(state), finish_then_prepare(pending, next_window))
+            pending, state = (state, result), next_state
+        if pending is not None:
+            await finish(*pending)
+    except asyncio.CancelledError:
+        if render_session is not None:
+            cleanup = asyncio.create_task(asyncio.to_thread(render_session.cancel))
+            await drain_future(cleanup)
+        raise
+    finally:
+        for open_state in open_states:
+            await run_sync(open_state.close)
+        if open_states:
+            open_states.clear()
             await run_sync(trim_process_heap)
     return model_list
+
+
+async def _gather_window_stages(
+    inference: Coroutine[Any, Any, list[Any]], side: Coroutine[Any, Any, _WindowInputs | None]
+) -> tuple[list[Any], _WindowInputs | None]:
+    """并发运行 VLM 与本地阶段；任一失败时取消并等待另一方退出后再传播。"""
+    tasks = (asyncio.create_task(inference), asyncio.create_task(side))
+    try:
+        result, next_state = await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+    return result, next_state
 
 
 def process_pdf_windows(

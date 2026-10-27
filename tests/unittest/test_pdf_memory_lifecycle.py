@@ -23,9 +23,19 @@ from mineru.backend.analysis.pdf import tables as stage_tables
 from mineru.model.runtime import hybrid as hybrid_runtime
 
 
-def _window_probe(monkeypatch: pytest.MonkeyPatch, failure: str = "") -> SimpleNamespace:
-    """隔离推理模型，保留真实数组、表格裁图和素材编码以检查窗口边界。"""
+def _window_probe(monkeypatch: pytest.MonkeyPatch, failure: str = "", *, overlap: bool = False) -> SimpleNamespace:
+    """隔离推理模型，保留真实数组、表格裁图和素材编码以检查窗口边界。
+
+    overlap 对应异步流水线：最近准备的窗口可与下一窗口共存，更早窗口必须已释放。
+    """
     probe = SimpleNamespace(arrays=[], crops=[], images=[], events=[])
+
+    def released() -> bool:
+        """检查已不允许存活的窗口数组与表格视图都已释放。"""
+        windows = probe.arrays[:-1] if overlap else probe.arrays
+        crops = probe.crops[:-1] if overlap else probe.crops
+        return all(ref() is None for refs in windows + crops for ref in refs)
+
     original_collect = window._collect_table_items
     original_attach = window._attach_visual_block_images
 
@@ -36,7 +46,7 @@ def _window_probe(monkeypatch: pytest.MonkeyPatch, failure: str = "") -> SimpleN
 
     def render(**_options: Any) -> list[dict[str, Any]]:
         """下一窗口分配图片之前，检查上一窗口图像数组与表格视图已释放。"""
-        assert all(ref() is None for ref in probe.arrays + probe.crops)
+        assert released()
         fail_at("render")
         image = Image.new("RGB", (40, 40), "red")
         probe.images.append(image)
@@ -51,9 +61,9 @@ def _window_probe(monkeypatch: pytest.MonkeyPatch, failure: str = "") -> SimpleN
 
     def collect(layouts: list[list[dict[str, Any]]], arrays: list[np.ndarray]) -> list[dict[str, Any]]:
         """只用弱引用观察独立页图数组及由真实函数产生的表格裁图。"""
-        probe.arrays.extend(weakref.ref(array) for array in arrays)
+        probe.arrays.append([weakref.ref(array) for array in arrays])
         items = original_collect(layouts, arrays)
-        probe.crops.extend(weakref.ref(item["table_img"]) for item in items)
+        probe.crops.append([weakref.ref(item["table_img"]) for item in items])
         return items
 
     def blocks(*_args: Any, **_kwargs: Any) -> list[list[dict[str, Any]]]:
@@ -67,7 +77,7 @@ def _window_probe(monkeypatch: pytest.MonkeyPatch, failure: str = "") -> SimpleN
     def text(*args: Any, **kwargs: Any) -> list[list[dict[str, Any]]]:
         """保持已有块与素材归属，模拟 OCR 异常。"""
         assert len(kwargs["np_images"]) == 1
-        assert any(ref() is kwargs["np_images"][0] for ref in probe.arrays)
+        assert any(ref() is kwargs["np_images"][0] for refs in probe.arrays for ref in refs)
         fail_at("ocr")
         return args[2]
 
@@ -84,7 +94,7 @@ def _window_probe(monkeypatch: pytest.MonkeyPatch, failure: str = "") -> SimpleN
     def trimmed() -> bool:
         """正常窗口回收前必须已释放临时数组，异常时只检查容器清理。"""
         if not failure:
-            assert all(ref() is None for ref in probe.arrays + probe.crops)
+            assert released()
         probe.events.append("trim")
         return False
 
@@ -246,7 +256,7 @@ def test_async_window_lifecycle_matches_sync(monkeypatch: pytest.MonkeyPatch, fa
     """异步窗口覆盖同样的阶段异常，推理完成后才关闭页图与数组容器。"""
     import asyncio
 
-    probe = _window_probe(monkeypatch, failure)
+    probe = _window_probe(monkeypatch, failure, overlap=True)
     synchronous = probe.predictor.batch_extract_with_layout
 
     async def infer(**kwargs: Any) -> list[list[dict[str, Any]]]:
@@ -270,7 +280,8 @@ def test_async_window_lifecycle_matches_sync(monkeypatch: pytest.MonkeyPatch, fa
             asyncio.run(operation)
     else:
         assert len(asyncio.run(operation)) == 2
-        assert probe.events == ["render", "trim", "render", "trim"]
+        # 窗口 1 的准备与窗口 0 的 VLM 重叠，两个窗口依序回填后各自回收。
+        assert probe.events == ["render", "render", "trim", "trim"]
     for image in probe.images:
         with pytest.raises(ValueError, match="closed image"):
             image.getpixel((0, 0))
@@ -323,25 +334,26 @@ def test_cancelled_window_preparation_still_closes_returned_images(monkeypatch: 
             image.getpixel((0, 0))
 
 
-@pytest.mark.parametrize("pages, sizes", [(64, [64]), (65, [64, 1])])
+@pytest.mark.parametrize("pages, sizes", [(64, [64]), (65, [64, 1]), (129, [64, 64, 1])])
 def test_async_window_keeps_64_page_boundary_and_order(
     monkeypatch: pytest.MonkeyPatch,
     pages: int,
     sizes: list[int],
 ) -> None:
-    """异步路径保持既有 64 页窗口边界，下一窗口只能在前一窗口清理后开始。"""
+    """异步路径保持既有 64 页窗口边界；准备窗口 N+1 前，窗口 N-1 必须已清理。"""
     import asyncio
 
-    images = []
+    images: list[list[Image.Image]] = []
     observed = []
 
     def prepare(_bytes: bytes, _doc: Any, current: Any, **kwargs: Any) -> Any:
-        """生成有序小图，并检查前一窗口的图片已经关闭。"""
-        for previous in images:
-            with pytest.raises(ValueError, match="closed image"):
-                previous.getpixel((0, 0))
+        """生成有序小图，并检查早于上一窗口的图片已经关闭。"""
+        for previous in images[:-1]:
+            for image in previous:
+                with pytest.raises(ValueError, match="closed image"):
+                    image.getpixel((0, 0))
         pictures = [Image.new("RGB", (1, 1), (index, 0, 0)) for index in range(current.start, current.end + 1)]
-        images.extend(pictures)
+        images.append(pictures)
         return window._WindowInputs(current, [{"img_pil": im} for im in pictures], [], pictures, [], [], [], [], [], None)
 
     async def infer(**kwargs: Any) -> list[list[dict[str, Any]]]:
@@ -367,3 +379,49 @@ def test_async_window_keeps_64_page_boundary_and_order(
     )
     assert observed == sizes
     assert [page[0]["page"] for page in result] == list(range(pages))
+
+
+def test_async_window_inference_overlaps_next_preparation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """窗口 0 的 VLM 等待期间准备窗口 1，回填仍按窗口顺序进行。"""
+    events: list[str] = []
+    next_prepared = asyncio.Event()
+    loops: list[asyncio.AbstractEventLoop] = []
+
+    def prepare(_bytes: bytes, _doc: Any, current: Any, **kwargs: Any) -> Any:
+        events.append(f"prepare {current.index}")
+        if current.index == 1:
+            loops[0].call_soon_threadsafe(next_prepared.set)
+        pictures = [Image.new("RGB", (1, 1)) for _ in range(current.start, current.end + 1)]
+        return window._WindowInputs(current, [{"img_pil": im} for im in pictures], [], pictures, [], [], [], [], [], None)
+
+    async def infer(**kwargs: Any) -> list[list[dict[str, Any]]]:
+        if not events.count("prepare 1"):
+            # 顺序执行时窗口 1 尚未准备，此等待会超时。
+            await asyncio.wait_for(next_prepared.wait(), 2)
+        events.append("vlm")
+        return [[{}] for _ in kwargs["images"]]
+
+    def finish(state: Any, result: Any, **kwargs: Any) -> Any:
+        events.append(f"finish {state.window.index}")
+        return result
+
+    monkeypatch.setattr(window, "_configured_window_size", lambda default: 1)
+    monkeypatch.setattr(window, "get_document_render_session", lambda _document: None)
+    monkeypatch.setattr(window, "_prepare_locked_window", prepare)
+    monkeypatch.setattr(window, "_finish_locked_window", finish)
+
+    async def run() -> list[list[dict[str, Any]]]:
+        loops.append(asyncio.get_running_loop())
+        return await window.aio_process_pdf_windows(
+            b"pdf",
+            SimpleNamespace(page_count=2),
+            effort="high",
+            parse_mode="ocr",
+            image_analysis=True,
+            hybrid_model=SimpleNamespace(device="cpu"),
+            vlm_predictor=SimpleNamespace(aio_batch_extract_with_layout=infer),
+        )
+
+    assert len(asyncio.run(run())) == 2
+    assert events.index("prepare 1") < events.index("finish 0")
+    assert [event for event in events if event.startswith("finish")] == ["finish 0", "finish 1"]
