@@ -759,3 +759,24 @@ def test_word_provenance_tracks_generated_cjk_space_removal(generated: bool, tig
     assert span.metadata["_position_words"]["text"] == expected
     assert [word["text"] for word in span.metadata["_position_words"]["words"]] == expected.split()
     assert len(span.metadata["_position_char_boxes"]) == len(expected)
+
+
+def test_probe_documents_do_not_copy_document_extensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mineru.parser import markdown_map
+
+    result = make_result([{"type": "text", "content": "Probe documents stay small."}])
+    middle = result.middle_json
+    middle.extensions["mineru_text_selection"] = {"version": 1, "text_source": "pdf", "blocks": [{"index": 1}] * 1000}
+    expected = result.markdown_with_map()
+    rendered = []
+    render = markdown_map.render_markdown
+
+    def spy(document: MiddleJson, **options: Any) -> str:
+        rendered.append(document)
+        return render(document, **options)
+
+    monkeypatch.setattr(markdown_map, "render_markdown", spy)
+    assert result.markdown_with_map() == expected
+    assert rendered[0] is middle
+    assert len(rendered) > 1
+    assert all(document.extensions == {} for document in rendered[1:])

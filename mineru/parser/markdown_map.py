@@ -24,13 +24,14 @@ _PROBE = "MINERUMARKDOWNSOURCEMAPPROBE0123456789"
 
 
 def _document(middle: MiddleJson, blocks: list[tuple[int, int, Any]]) -> MiddleJson:
+    # Markdown rendering never reads extensions, but deep-copies every probe
+    # document: carrying whole-document extensions makes the map quadratic.
     pages = []
     for page_offset, page in enumerate(middle.pages):
         owned = [block for p, _, block in blocks if p == page_offset]
         if owned:
             pages.append(page.model_copy(update={"blocks": owned}))
-    extensions = {k: v for k, v in middle.extensions.items() if k not in {"mineru_position_sources", "mineru_positions"}}
-    return middle.model_copy(update={"pages": pages, "extensions": extensions})
+    return middle.model_copy(update={"pages": pages, "extensions": {}})
 
 
 def _groups(middle: MiddleJson) -> list[list[tuple[int, int, Any]]]:
