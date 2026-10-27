@@ -11,7 +11,9 @@ The VLM still runs, and the source PDF is never modified or rewritten.
 
 This option supports `standard` and `advanced` with `ocr_mode="all"`. Other mode
 and tier combinations are rejected. Image inputs converted to PDF also work.
-The default `text_source="pdf"` retains the existing behavior.
+The Python API and CLI default to `text_source="pdf"`. The REST API defaults to
+`both` when a request omits `text_source` and resolves to `all`; requests that
+resolve to another mode or tier (Flash/basic, native documents) use `pdf`.
 
 ## Python
 
@@ -54,8 +56,8 @@ For `POST /v1/parse/jobs`, add the following fields to the normal request:
 ```
 
 The `/v1/tasks` and `/v1/file_parse` upload endpoints accept the same
-`text_source=both` query parameter. `pdf` and `tesseract` remain available for
-single-candidate comparisons.
+`text_source=both` query parameter, which is also their default. Send `pdf` or
+`tesseract` for single-candidate comparisons.
 
 ## Execution and selection
 

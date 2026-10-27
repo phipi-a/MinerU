@@ -76,8 +76,9 @@ class RouterTaskBackend:
     async def submit(self, body: CreateJobRequest, uploads: dict[int, TaskUpload]) -> dict[str, Any]:
         """委托共享提交服务，源字节传输也纳入相同的负载预占。"""
         payload = body.model_dump(exclude_none=True)
-        if "ocr_mode" not in body.model_fields_set:
-            payload.pop("ocr_mode", None)
+        for field in ("ocr_mode", "text_source"):
+            if field not in body.model_fields_set:
+                payload.pop(field, None)
         return _response_data(await self.submit_job(payload, self.request, uploads))
 
     async def get(self, task_id: str) -> dict[str, Any]:

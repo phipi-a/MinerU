@@ -192,6 +192,7 @@ def test_api_client_and_task_options_expose_text_source(text_source: str) -> Non
     parser = MinerUApiParser(tier="advanced", ocr_mode="all", text_source=text_source)
     assert parser._build_payload({"type": "file_id", "file_id": "file-1"}, "r1")["text_source"] == text_source
     assert "text_source" not in MinerUApiParser()._build_payload({}, "")
+    assert MinerUApiParser(text_source="pdf")._build_payload({}, "")["text_source"] == "pdf"
     assert UploadTaskOptions(text_source=text_source).text_source == text_source
 
 

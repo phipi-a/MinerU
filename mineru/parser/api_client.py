@@ -136,9 +136,9 @@ class MinerUApiParser(DocumentParser):
         ocr_mode: Literal["auto", "txt", "ocr", "all"] | None = None,
         include_images: bool = False,
         include_model_output: bool = False,
-        text_source: Literal["pdf", "tesseract", "both"] = "pdf",
+        text_source: Literal["pdf", "tesseract", "both"] | None = None,
     ) -> None:
-        """保存请求配置；未指定 OCR 模式时省略字段，保留既有客户端的请求结构。"""
+        """保存请求配置；未指定 OCR 模式或文本来源时省略字段，由服务端默认值决定。"""
         if ocr_mode is not None and ocr_mode not in ("auto", "txt", "ocr", "all"):
             raise ValueError(f"Unsupported OCR mode '{ocr_mode}'")
         self._base_url = (api_url or os.environ.get("MINERU_API_URL") or self.DEFAULT_API_URL).rstrip("/")
@@ -147,7 +147,7 @@ class MinerUApiParser(DocumentParser):
         self._trust_env = should_trust_env_for_url(self._base_url)
         self._source_features: set[str] | None = None
         self.tier = validate_tier(tier) if tier is not None else None
-        if text_source not in {"pdf", "tesseract", "both"}:
+        if text_source is not None and text_source not in {"pdf", "tesseract", "both"}:
             raise ValueError(f"Unsupported text source: {text_source}")
         if text_source in {"tesseract", "both"} and (
             ocr_mode not in {None, "all"} or tier not in {None, "standard", "advanced"}
@@ -255,7 +255,7 @@ class MinerUApiParser(DocumentParser):
             payload["tier"] = self.tier
         if self.ocr_mode is not None:
             payload["ocr_mode"] = self.ocr_mode
-        if self.text_source != "pdf":
+        if self.text_source is not None:
             payload["text_source"] = self.text_source
         return payload
 

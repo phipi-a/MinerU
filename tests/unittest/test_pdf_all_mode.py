@@ -205,18 +205,26 @@ def test_api_rejects_all_on_flash_before_creating_jobs(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("route", ["jobs", "tasks", "file_parse"])
 @pytest.mark.parametrize(
-    ("tier", "explicit_mode", "expected"),
+    ("tier", "explicit_mode", "explicit_source", "expected"),
     [
-        ("standard", None, "all"),
-        ("advanced", None, "all"),
-        ("basic", None, "auto"),
-        ("flash", None, "auto"),
-        ("standard", "auto", "auto"),
-        ("standard", "txt", "txt"),
+        ("standard", None, None, ("all", "both")),
+        ("advanced", None, None, ("all", "both")),
+        ("basic", None, None, ("auto", "pdf")),
+        ("flash", None, None, ("auto", "pdf")),
+        ("standard", "auto", None, ("auto", "pdf")),
+        ("standard", "txt", None, ("txt", "pdf")),
+        ("standard", None, "pdf", ("all", "pdf")),
+        ("advanced", "all", "tesseract", ("all", "tesseract")),
     ],
 )
 def test_api_resolves_omitted_mode_for_jobs_and_uploads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str, tier: str, explicit_mode: str | None, expected: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    tier: str,
+    explicit_mode: str | None,
+    explicit_source: str | None,
+    expected: tuple[str, str],
 ) -> None:
     from test_markdown_map import make_result
     from mineru.parser import api_server
@@ -224,7 +232,7 @@ def test_api_resolves_omitted_mode_for_jobs_and_uploads(
     seen = []
 
     async def parse(_path: str, **options: Any) -> ParseResult:
-        seen.append(options["ocr_mode"])
+        seen.append((options["ocr_mode"], options.get("text_source", "pdf")))
         return make_result([{"type": "text", "content": "Verified default."}])
 
     monkeypatch.setattr(api_server, "ensure_tier_runtime_dependencies", lambda *_args, **_kwargs: None)
@@ -240,6 +248,8 @@ def test_api_resolves_omitted_mode_for_jobs_and_uploads(
             }
             if explicit_mode is not None:
                 payload["ocr_mode"] = explicit_mode
+            if explicit_source is not None:
+                payload["text_source"] = explicit_source
             response = client.post("/v1/parse/jobs", json=payload)
             assert response.status_code == 202, response.text
             job_id = response.json()["job_id"]
@@ -247,6 +257,8 @@ def test_api_resolves_omitted_mode_for_jobs_and_uploads(
             params = {"tier": tier, "filename": "default.pdf"}
             if explicit_mode is not None:
                 params["ocr_mode"] = explicit_mode
+            if explicit_source is not None:
+                params["text_source"] = explicit_source
             response = client.post(
                 f"/v1/{route}", params=params, content=b"%PDF-test", headers={"Content-Type": "application/octet-stream"}
             )
@@ -269,7 +281,7 @@ def test_mixed_pdf_and_native_inputs_resolve_defaults_per_file(tmp_path: Path, m
     seen = {}
 
     async def parse(path: str, **options: Any) -> ParseResult:
-        seen[Path(path).suffix] = options["ocr_mode"]
+        seen[Path(path).suffix] = (options["ocr_mode"], options.get("text_source", "pdf"))
         return make_result([{"type": "text", "content": "Mixed inputs."}])
 
     monkeypatch.setattr(api_server, "ensure_tier_runtime_dependencies", lambda *_args, **_kwargs: None)
@@ -281,4 +293,4 @@ def test_mixed_pdf_and_native_inputs_resolve_defaults_per_file(tmp_path: Path, m
         )
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "completed", response.text
-    assert seen == {".pdf": "all", ".html": "auto"}
+    assert seen == {".pdf": ("all", "both"), ".html": ("auto", "pdf")}

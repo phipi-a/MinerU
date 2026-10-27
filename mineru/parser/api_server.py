@@ -497,7 +497,11 @@ class CreateJobRequest(BaseModel):
         ),
     )
     text_source: Literal["pdf", "tesseract", "both"] = Field(
-        default="pdf", description="Text candidates in all mode: pdf, tesseract English OCR, or both (standard/advanced)."
+        default="both",
+        description=(
+            "Text candidates in all mode: pdf, tesseract English OCR, or both (standard/advanced, default). "
+            "When omitted, requests not resolved to all mode use pdf."
+        ),
     )
     output_formats: list[str] = ["markdown"]
     pure_markdown: bool = False
@@ -1775,16 +1779,18 @@ async def _run_job(
                         local_resource_root=extracted.local_resource_root,
                         transport_encoding=extracted.transport_encoding,
                     )
+                ocr_mode = "auto" if "ocr_mode" not in req.model_fields_set and effective_tier == "flash" else req.ocr_mode
+                text_source = req.text_source if ocr_mode == "all" else "pdf"
                 result = await parse_async(
                     str(tmp_path),
                     tier=effective_tier,
-                    ocr_mode=("auto" if "ocr_mode" not in req.model_fields_set and effective_tier == "flash" else req.ocr_mode),
+                    ocr_mode=ocr_mode,
                     image_analysis=image_analysis,
                     page_range=page_range,
                     source_context=source_context,
                     vlm_config=vlm_config,
                     **({"positions": True} if "markdown_map" in rec.output_formats else {}),
-                    **({"text_source": req.text_source} if req.text_source != "pdf" else {}),
+                    **({"text_source": text_source} if text_source != "pdf" else {}),
                 )
 
                 if rec.status in {"canceled", "failed"}:
@@ -2257,6 +2263,8 @@ async def submit_parse_job(
         body.tier = body.tier or default_tier
     if "ocr_mode" not in body.model_fields_set and (body.tier not in {"standard", "advanced"} or can_default_to_flash):
         body.ocr_mode = "auto"
+    if "text_source" not in body.model_fields_set and (body.ocr_mode != "all" or body.tier not in {"standard", "advanced"}):
+        body.text_source = "pdf"
     if body.ocr_mode == "all" and (body.tier not in {"standard", "advanced"} or can_default_to_flash):
         _raise_api_error(
             400,
